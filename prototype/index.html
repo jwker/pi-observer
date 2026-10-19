@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pi-observer · 会话列表</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body data-page="sessions">
+
+<!-- ===================== 顶栏 ===================== -->
+<div class="topbar">
+  <div class="brand">
+    <span class="dot">●</span>pi-observer
+    <span class="sub">只读</span>
+  </div>
+  <nav class="nav">
+    <a class="active" href="index.html">会话列表</a>
+    <a href="probe.html">探针状态</a>
+    <a href="style-guide.html">设计规范</a>
+  </nav>
+  <div class="spacer"></div>
+  <span class="probe-pill" title="探针最近一次推送时间">
+    <span class="pulse"></span>探针已连接 · 2 秒前
+  </span>
+</div>
+
+<div class="page">
+
+  <!-- ===================== 页头 ===================== -->
+  <div class="page-head">
+    <div class="title">
+      <h1>会话列表</h1>
+      <div class="crumb">按项目分组 · 按最后活跃时间倒序 · 共 6 个会话</div>
+    </div>
+    <div class="spacer"></div>
+    <span class="kbd">/</span><span class="faint" style="font-size:11px">搜索</span>
+  </div>
+
+  <div class="notice readonly">
+    <span class="ic">◍</span>
+    <div>只读界面：不提供删除、隐藏、重命名等入口。数据来自 <code>~/.pi/agent/sessions/</code> 的会话文件与探针推送，不改动 Pi 的任何数据。</div>
+  </div>
+
+  <!-- ===================== 概览 ===================== -->
+  <div class="panel" style="margin-top:14px">
+    <div class="panel-body metrics">
+      <div class="metric"><span class="label">活跃会话</span><span class="v up">2</span></div>
+      <div class="metric"><span class="label">会话总数</span><span class="v">6</span></div>
+      <div class="metric"><span class="label">今日事件</span><span class="v">1,842</span></div>
+      <div class="metric"><span class="label">今日 token</span><span class="v down">↑ 412K / ↓ 38K</span></div>
+      <div class="metric"><span class="label">今日成本</span><span class="v cost">$ 1.24</span></div>
+      <div class="metric"><span class="label">丢弃事件</span><span class="v">0</span></div>
+      <div class="metric"><span class="label">最近对账</span><span class="v" style="font-size:12px;color:var(--fg-1)">21:04:12</span></div>
+    </div>
+  </div>
+
+  <!-- ===================== 筛选 + 列表 ===================== -->
+  <div class="panel" style="margin-top:14px" data-filters>
+    <div class="panel-head">
+      <span>会话</span>
+      <span class="count">6 个</span>
+    </div>
+
+    <div class="panel-body toolbar">
+      <label class="input">
+        <span style="color:var(--fg-3)">⌕</span>
+        <input data-search placeholder="搜索会话 ID、项目路径、模型或摘要…">
+      </label>
+      <div class="seg">
+        <button data-filter-group="state" data-filter-value="all" class="on">全部</button>
+        <button data-filter-group="state" data-filter-value="active">进行中</button>
+        <button data-filter-group="state" data-filter-value="idle">空闲</button>
+        <button data-filter-group="state" data-filter-value="ended">已结束</button>
+      </div>
+      <div class="seg">
+        <button data-filter-group="src" data-filter-value="all" class="on">全部来源</button>
+        <button data-filter-group="src" data-filter-value="live">实时</button>
+        <button data-filter-group="src" data-filter-value="backfill">回填</button>
+        <button data-filter-group="src" data-filter-value="merged">已对账</button>
+      </div>
+      <div class="spacer"></div>
+      <span class="faint" style="font-size:11px">点击任意一行进入会话详情</span>
+    </div>
+
+    <div class="rows">
+      <div class="row head session">
+        <span></span><span>会话</span><span>摘要 / 项目</span>
+        <span class="num">消息</span><span class="num">Turn</span><span class="num">工具</span>
+        <span class="num">token</span><span class="num">成本</span><span class="num">最后活跃</span>
+      </div>
+
+      <!-- ---------- 分组：pi-observer ---------- -->
+      <div class="group">
+        <div class="group-head"><span class="path">/Users/jiangjiang/Documents/host/pi-observer</span><span class="faint">2 个会话</span></div>
+
+        <a class="row session hover" href="session.html" data-row data-state="active" data-src="merged" data-search="/Users/jiangjiang/Documents/host/pi-observer deepseek-v4-pro 整理 PRD">
+          <span class="badge plain"><span class="dot-sm" style="color:var(--green)"></span></span>
+          <span class="nowrap" style="color:var(--fg-1)">01a149bf</span>
+          <span class="col-grow"><span style="color:var(--fg)">整理 PRD v0.2 与保留策略</span> <span class="faint">·</span> <span class="badge ok">进行中</span></span>
+          <span class="num">42</span><span class="num">11</span><span class="num">18</span>
+          <span class="num" style="color:var(--green)">↑ 128K</span>
+          <span class="num" style="color:var(--amber)">0.42</span>
+          <span class="num faint">2 秒前</span>
+        </a>
+
+        <a class="row session hover" href="session.html" data-row data-state="idle" data-src="backfill" data-search="/Users/jiangjiang/Documents/host/pi-observer deepseek-v4-pro Durable">
+          <span class="badge plain"><span class="dot-sm" style="color:var(--amber)"></span></span>
+          <span class="nowrap" style="color:var(--fg-1)">7c02de11</span>
+          <span class="col-grow"><span style="color:var(--fg)">验证 Durable 只读可行性</span> <span class="faint">·</span> <span class="badge warn">空闲</span></span>
+          <span class="num">96</span><span class="num">24</span><span class="num">57</span>
+          <span class="num" style="color:var(--green)">↑ 402K</span>
+          <span class="num" style="color:var(--amber)">1.18</span>
+          <span class="num faint">3 小时前</span>
+        </a>
+      </div>
+
+      <!-- ---------- 分组：pi-web ---------- -->
+      <div class="group">
+        <div class="group-head"><span class="path">/Users/jiangjiang/Documents/host/pi-web</span><span class="faint">3 个会话</span></div>
+
+        <a class="row session hover" href="session.html" data-row data-state="active" data-src="live" data-search="/Users/jiangjiang/Documents/host/pi-web deepseek-v4-pro prism">
+          <span class="badge plain"><span class="dot-sm" style="color:var(--green)"></span></span>
+          <span class="nowrap" style="color:var(--fg-1)">3f81c0a7</span>
+          <span class="col-grow"><span style="color:var(--fg)">排查 prism 语言包按需加载</span> <span class="faint">·</span> <span class="badge ok">进行中</span></span>
+          <span class="num">17</span><span class="num">6</span><span class="num">8</span>
+          <span class="num" style="color:var(--green)">↑ 15K</span>
+          <span class="num" style="color:var(--amber)">0.04</span>
+          <span class="num faint">26 秒前</span>
+        </a>
+
+        <a class="row session hover" href="session.html" data-row data-state="ended" data-src="backfill" data-search="/Users/jiangjiang/Documents/host/pi-web deepseek-v4-pro 时间线">
+          <span class="badge plain"><span class="dot-sm" style="color:var(--fg-3)"></span></span>
+          <span class="nowrap" style="color:var(--fg-1)">b19dd3ee</span>
+          <span class="col-grow"><span style="color:var(--fg)">会话查看器的时间线虚拟滚动</span> <span class="faint">·</span> <span class="badge">已结束</span></span>
+          <span class="num">210</span><span class="num">48</span><span class="num">122</span>
+          <span class="num" style="color:var(--green)">↑ 1.2M</span>
+          <span class="num" style="color:var(--amber)">3.61</span>
+          <span class="num faint">昨天 19:22</span>
+        </a>
+
+        <a class="row session hover" href="session.html" data-row data-state="ended" data-src="merged" data-search="/Users/jiangjiang/Documents/host/pi-web deepseek-v4-pro 分叉">
+          <span class="badge plain"><span class="dot-sm" style="color:var(--fg-3)"></span></span>
+          <span class="nowrap" style="color:var(--fg-1)">5a0c7731</span>
+          <span class="col-grow"><span style="color:var(--fg)">分叉：改用 PrismLight 核心包</span> <span class="faint">·</span> <span class="badge">已结束</span> <span class="badge violet">分支</span></span>
+          <span class="num">54</span><span class="num">12</span><span class="num">20</span>
+          <span class="num" style="color:var(--green)">↑ 88K</span>
+          <span class="num" style="color:var(--amber)">0.31</span>
+          <span class="num faint">10 月 17 日</span>
+        </a>
+      </div>
+
+      <!-- ---------- 分组：scratch ---------- -->
+      <div class="group">
+        <div class="group-head"><span class="path">/Users/jiangjiang/scratch</span><span class="faint">1 个会话</span></div>
+
+        <a class="row session hover" href="session.html" data-row data-state="idle" data-src="live" data-search="/Users/jiangjiang/scratch deepseek-v4-pro 草稿">
+          <span class="badge plain"><span class="dot-sm" style="color:var(--amber)"></span></span>
+          <span class="nowrap" style="color:var(--fg-1)">9e4410ab</span>
+          <span class="col-grow"><span style="color:var(--fg)">草稿：比较两种消息树渲染方式</span> <span class="faint">·</span> <span class="badge warn">空闲</span></span>
+          <span class="num">6</span><span class="num">2</span><span class="num">0</span>
+          <span class="num" style="color:var(--green)">↑ 4.2K</span>
+          <span class="num" style="color:var(--amber)">0.01</span>
+          <span class="num faint">10 月 16 日</span>
+        </a>
+      </div>
+
+      <div class="empty" data-empty style="display:none">没有匹配的会话。试试清空搜索或切换筛选。</div>
+    </div>
+  </div>
+
+  <div class="notice" style="margin-top:14px">
+    <span class="ic">i</span>
+    <div>
+      <b style="color:var(--fg)">状态口径</b>：<span class="badge ok">进行中</span> 最近有实时事件；
+      <span class="badge warn">空闲</span> 已收到 <code>agent_settled</code> 且 60 秒无新事件；
+      <span class="badge">已结束</span> 会话进程已退出。来源标记：<code>live</code> 实时推送、<code>backfill</code> 从会话文件回填、<code>merged</code> 已对账。
+    </div>
+  </div>
+</div>
+
+<!-- ===================== 状态栏 ===================== -->
+<div class="statusbar">
+  <span class="item"><span class="dot-sm" style="color:var(--green)"></span>探针已连接</span>
+  <span class="item">最近推送 <span style="color:var(--fg)">2 秒前</span></span>
+  <span class="item">队列 <span style="color:var(--fg)">3 / 2000</span></span>
+  <span class="item">累计丢弃 <span style="color:var(--fg)">0</span></span>
+  <span class="spacer"></span>
+  <span class="item faint">数据仅存本机 127.0.0.1:4173</span>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

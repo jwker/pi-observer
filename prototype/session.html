@@ -1,0 +1,312 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pi-observer · 会话详情</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body data-page="session">
+
+<!-- ===================== 顶栏 ===================== -->
+<div class="topbar">
+  <div class="brand"><span class="dot">●</span>pi-observer <span class="sub">只读</span></div>
+  <nav class="nav">
+    <a href="index.html">会话列表</a>
+    <a class="active" href="session.html">会话详情</a>
+    <a href="probe.html">探针状态</a>
+    <a href="style-guide.html">设计规范</a>
+  </nav>
+  <div class="spacer"></div>
+  <span class="probe-pill"><span class="pulse"></span>探针已连接 · 2 秒前</span>
+</div>
+
+<div class="page">
+
+  <!-- ===================== 页头 ===================== -->
+  <div class="page-head">
+    <div class="title">
+      <div class="crumb"><a href="index.html">会话列表</a> / /Users/jiangjiang/Documents/host/pi-observer</div>
+      <h1>01a149bf-df78-7438-97d4-ee2d89d5e8ff</h1>
+    </div>
+    <div class="spacer"></div>
+    <div class="demo-row">
+      <span class="chip" data-chip="thinking" title="显示或隐藏思考过程"><span class="k">T</span>Toggle thinking</span>
+      <span class="chip" data-chip="tools"><span class="k">O</span>Toggle tools</span>
+      <span class="chip" data-chip="hidden" data-default="off"><span class="k">H</span>Show hidden messages</span>
+      <a class="chip" data-jsonl href="jsonl.html"><span class="k">J</span>JSONL</a>
+    </div>
+  </div>
+
+  <!-- ===================== 会话信息 ===================== -->
+  <div class="panel">
+    <div class="panel-body" style="display:flex;gap:34px;flex-wrap:wrap">
+      <dl class="kv">
+        <dt>工作目录</dt><dd>/Users/jiangjiang/Documents/host/pi-observer</dd>
+        <dt>开始时间</dt><dd>2026-10-19 13:22:04</dd>
+        <dt>最后活跃</dt><dd>2 秒前</dd>
+        <dt>来源</dt><dd><span class="badge info">merged</span> 实时推送 + 文件回填已对账</dd>
+      </dl>
+      <dl class="kv">
+        <dt>模型</dt><dd><span style="color:var(--blue)">deepseek/deepseek-v4-pro</span></dd>
+        <dt>思考等级</dt><dd>medium</dd>
+        <dt>状态</dt><dd><span class="badge ok">进行中</span> Turn 11 生成中</dd>
+        <dt>会话文件</dt><dd>…/--Users-jiangjiang-…-pi-observer--/20261019T132204_01a149bf.jsonl</dd>
+      </dl>
+      <div class="metrics" style="gap:0 26px">
+        <div class="metric"><span class="label">消息</span><span class="v">42</span></div>
+        <div class="metric"><span class="label">Turn</span><span class="v">11</span></div>
+        <div class="metric"><span class="label">工具</span><span class="v">18</span></div>
+        <div class="metric"><span class="label">输入 token</span><span class="v up">↑ 128K</span></div>
+        <div class="metric"><span class="label">输出 token</span><span class="v down">↓ 9.4K</span></div>
+        <div class="metric"><span class="label">缓存读取</span><span class="v" style="color:var(--cyan)">R 96K</span></div>
+        <div class="metric"><span class="label">成本</span><span class="v cost">$ 0.42</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================== 主体：树 + 详情 ===================== -->
+  <div class="session-layout" style="margin-top:14px">
+
+    <!-- ---------- 左：消息树 ---------- -->
+    <div class="panel">
+      <div class="panel-head"><span>消息树</span><span class="count">42 条</span></div>
+      <div class="tree-search">
+        <label class="input"><span style="color:var(--fg-3)">⌕</span><input placeholder="过滤节点…"></label>
+      </div>
+      <div class="tree">
+        <div class="node">
+          <div class="node-line" data-tree-toggle>
+            <span class="twist">▾</span><span class="ic system">◇</span><span class="txt">system</span><span class="meta">52 KB</span>
+          </div>
+        </div>
+        <div class="node">
+          <div class="node-line" data-tree-toggle>
+            <span class="twist">▾</span><span class="ic user">▸</span><span class="txt">读一下 PRD，确认保留策略</span><span class="meta">21:03</span>
+          </div>
+          <div class="node-children">
+            <div class="node">
+              <div class="node-line" data-tree-toggle>
+                <span class="twist">▸</span><span class="ic assistant">▾</span><span class="txt">读了 PRD，先核对 §8.6…</span><span class="meta">4.2K</span>
+              </div>
+              <div class="node-children">
+                <div class="node"><div class="node-line" data-tree-toggle><span class="twist"></span><span class="ic tool">→</span><span class="txt">read docs/prd-v0.2.md</span><span class="meta">186 ms</span></div></div>
+                <div class="node"><div class="node-line" data-tree-toggle><span class="twist"></span><span class="ic tool">→</span><span class="txt">grep "保留" docs/</span><span class="meta">92 ms</span></div></div>
+              </div>
+            </div>
+            <div class="node">
+              <div class="node-line" data-tree-toggle>
+                <span class="twist"></span><span class="ic assistant">▸</span><span class="txt">三处需要改：事件保留、payload 清空、VACUUM</span><span class="meta">3.1K</span>
+              </div>
+            </div>
+            <div class="node">
+              <div class="node-line" data-tree-toggle>
+                <span class="twist">▾</span><span class="ic user">▸</span><span class="txt">好，按 7 天改，顺便把 JSONL 页做出来</span><span class="meta">21:04</span>
+              </div>
+              <div class="node-children">
+                <div class="node"><div class="node-line off-branch" data-tree-toggle><span class="twist"></span><span class="ic branch">⑂</span><span class="txt">分叉：改成只留摘要？</span><span class="meta">已废弃</span></div></div>
+                <div class="node"><div class="node-line" data-tree-toggle><span class="twist"></span><span class="ic tool">→</span><span class="txt">edit docs/prd-v0.2.md</span><span class="meta">310 ms</span></div></div>
+                <div class="node">
+                  <div class="node-line" data-tree-toggle><span class="twist"></span><span class="ic compact">▣</span><span class="txt">compaction · 压缩 21 条为摘要</span><span class="meta">12 KB</span></div>
+                </div>
+              </div>
+            </div>
+            <div class="node">
+              <div class="node-line active" data-tree-toggle data-entry="msg_pending"
+                   data-full="{
+  &quot;role&quot;: &quot;assistant&quot;,
+  &quot;type&quot;: &quot;message&quot;,
+  &quot;entryId&quot;: &quot;（流式进行中，落盘后由 turn_end 给出 messageEntryId）&quot;,
+  &quot;parentId&quot;: &quot;msg_5a0c7731&quot;,
+  &quot;content&quot;: [
+    { &quot;type&quot;: &quot;text&quot;, &quot;text&quot;: &quot;正在生成：会话列表页已经能筛选…&quot; }
+  ],
+  &quot;timestamp&quot;: &quot;2026-10-19 21:05:00&quot;
+}">
+                <span class="twist"></span><span class="ic assistant">▸</span><span class="txt">正在生成：会话列表页已经能筛选…</span>
+                <span class="meta" style="color:var(--accent)">生成中</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel-head" style="border-top:1px solid var(--border)"><span>选中节点</span><span class="count" data-node-meta>msg_pending</span></div>
+      <div class="panel-body" data-node-detail style="padding:10px 12px 12px">
+        <div style="color:var(--fg);margin-bottom:6px" data-node-title>正在生成：会话列表页已经能筛选…</div>
+        <div class="pre" data-node-body style="max-height:168px;overflow:auto;margin:0">{
+  "role": "assistant",
+  "type": "message",
+  "entryId": "（流式进行中，落盘后由 turn_end 给出 messageEntryId）",
+  "parentId": "msg_5a0c7731",
+  "content": [
+    { "type": "text", "text": "正在生成：会话列表页已经能筛选…" }
+  ],
+  "timestamp": "2026-10-19 21:05:00"
+}</div>
+      </div>
+      <div class="panel-body" style="border-top:1px solid var(--border);padding:8px 10px">
+        <div class="faint" style="font-size:10.5px">节点来自会话文件的 <code>id</code> / <code>parentId</code>；灰色为未选中的分支，绿色 <span style="color:var(--green)">⑂</span> 为分叉起点，琥珀 <span style="color:var(--amber)">▣</span> 为压缩摘要。</div>
+      </div>
+    </div>
+
+    <!-- ---------- 右：三视图 ---------- -->
+    <div class="panel" data-tabgroup>
+      <div class="tabs">
+        <button data-tab="timeline" class="on">时间线 <span class="tab-count">11 轮</span></button>
+        <button data-tab="requests">请求 <span class="tab-count">11</span></button>
+        <button data-tab="tools">工具 <span class="tab-count">18</span></button>
+      </div>
+
+      <!-- ===== 时间线 ===== -->
+      <div data-panel="timeline">
+        <div class="timeline">
+
+          <div class="turn-box">
+            <div class="turn-head" data-box-toggle>
+              <span class="twist">▾</span><span class="idx">Turn 9</span>
+              <span class="sum">read docs/prd-v0.2.md · grep 保留 · 387 ms</span>
+              <span class="spacer"></span>
+              <span class="badge">已完成</span><span class="faint">↑ 9.1K ↓ 620 · $0.03</span>
+            </div>
+            <div class="turn-body">
+              <div class="ev"><span class="time">21:04:02</span><span class="etype turn">turn_start</span><span class="body">turnIndex 9 <span class="note">· runSeq 2（turnIndex 每次 agent_start 归零，故需运行序号分组）</span></span></div>
+              <div class="ev depth-1"><span class="time">21:04:02</span><span class="etype provider">provider →</span><span class="body">deepseek · openai-completions · deepseek-v4-pro <span class="note">· payload 128 KB（脱敏后）</span> <a href="request.html">查看请求 #10</a></span></div>
+              <div class="ev depth-1"><span class="time">21:04:03</span><span class="etype provider">provider ←</span><span class="body">200 OK <span class="note">· 响应头已脱敏 · 正文由流式事件重建</span></span></div>
+              <div class="ev depth-1 tool"><span class="time">21:04:03</span><span class="etype tool">tool_start</span><span class="body"><span style="color:var(--pink)">read</span> <span class="faint">{ path: "docs/prd-v0.2.md" }</span> <a href="tool.html">详情</a></span></div>
+              <div class="ev depth-2 tool"><span class="time">21:04:03</span><span class="etype tool">tool_end</span><span class="body">186 ms · 8.4 KB <span class="badge ok">成功</span></span></div>
+              <div class="ev depth-1 tool"><span class="time">21:04:04</span><span class="etype tool">tool_start</span><span class="body"><span style="color:var(--pink)">grep</span> <span class="faint">{ pattern: "保留", path: "docs/" }</span> <a href="tool.html">详情</a></span></div>
+              <div class="ev depth-2 tool"><span class="time">21:04:04</span><span class="etype tool">tool_end</span><span class="body">92 ms · 1.2 KB <span class="badge ok">成功</span></span></div>
+              <div class="ev"><span class="time">21:04:05</span><span class="etype turn">turn_end</span><span class="body">stopReason: stop <span class="note">· messageEntryId: msg_7c02de11 · 已落盘</span></span></div>
+            </div>
+          </div>
+
+          <div class="turn-box failed">
+            <div class="turn-head" data-box-toggle>
+              <span class="twist">▾</span><span class="idx">Turn 10</span>
+              <span class="sum">bash pnpm run dev · 失败 1 次</span>
+              <span class="spacer"></span>
+              <span class="badge err">工具出错</span><span class="faint">↑ 11.4K ↓ 480 · $0.04</span>
+            </div>
+            <div class="turn-body">
+              <div class="ev"><span class="time">21:04:41</span><span class="etype turn">turn_start</span><span class="body">turnIndex 10</span></div>
+              <div class="ev depth-1 tool"><span class="time">21:04:42</span><span class="etype tool">tool_start</span><span class="body"><span style="color:var(--pink)">bash</span> <span class="faint">{ command: "pnpm run dev" }</span> <a href="tool.html">详情</a></span></div>
+              <div class="ev depth-2 tool"><span class="time">21:04:48</span><span class="etype tool">tool_end</span><span class="body">6.1 s · exit 1 <span class="badge err">失败</span></span></div>
+              <div class="ev depth-2"><span class="time">21:04:48</span><span class="etype tool">stderr</span><span class="body"><span class="note">解析器把 stderr 与 exit code 一并记录，可在工具详情页展开：</span></span></div>
+              <div class="pre err" style="margin-left:28px">Error: Module not found: Can't resolve 'refractor/all'
+  at /lib/prism-languages.ts:18:15
+
+Command exited with code 1</div>
+              <div class="ev"><span class="time">21:04:50</span><span class="etype message">message_start</span><span class="body">assistant <span class="note">· 说明失败原因，不改动代码</span></span></div>
+              <div class="ev thinking"><span class="time">21:04:50</span><span class="etype message">thinking</span><span class="body">先确认 refractor 是否安装、装的是哪个版本、是否暴露 <code>refractor/all</code>。<span class="note">· 由 message_update 流式事件合并</span></span></div>
+              <div class="ev"><span class="time">21:04:52</span><span class="etype turn">turn_end</span><span class="body">stopReason: stop <span class="note">· messageEntryId: msg_5a0c7731 · toolResultEntryIds: [tr_9e44]</span></span></div>
+            </div>
+          </div>
+
+          <div class="turn-box running">
+            <div class="turn-head" data-box-toggle>
+              <span class="twist">▾</span><span class="idx">Turn 11</span>
+              <span class="sum">正在生成回复…</span>
+              <span class="spacer"></span>
+              <span class="badge ok">进行中</span><span class="snap" data-stream-snap>快照 0 · 500ms 节流</span>
+            </div>
+            <div class="turn-body">
+              <div class="ev"><span class="time">21:04:58</span><span class="etype turn">turn_start</span><span class="body">turnIndex 11</span></div>
+              <div class="ev depth-1"><span class="time">21:04:58</span><span class="etype provider">provider →</span><span class="body">deepseek · openai-completions · deepseek-v4-pro <span class="note">· payload 131 KB · 与请求 #11 按顺序关联</span></span></div>
+              <div class="ev depth-1"><span class="time">21:04:59</span><span class="etype provider">provider ←</span><span class="body">200 OK <span class="note">· Server-Timing: 412ms</span></span></div>
+              <div class="ev depth-1 thinking"><span class="time">21:04:59</span><span class="etype message">thinking</span><span class="body">先给出结论，再列完成清单与待定项。<span class="note">· message_update 合并</span></span></div>
+              <div class="ev depth-1 streaming" data-stream="保留策略已经统一成 7 天：events 整行删除，llm_requests 的 payload 清空成 { deleted: true }，行与统计字段保留。会话文件一个字节都没动。清理任务在服务启动时跑一次，之后每小时一次，每天 VACUUM 一次回收空间。">
+                <span class="time">21:05:00</span><span class="etype message">assistant</span>
+                <span class="body">
+                  <span class="stream-text"></span><span class="caret"></span>
+                  <div class="faint" style="font-size:10.5px;margin-top:4px">半透明区域为正在生成的正文，按 500 ms 快照刷新；关闭实时正文后这里只显示“生成中…”</div>
+                </span>
+              </div>
+              <div class="ev is-hidden"><span class="time">21:05:01</span><span class="etype message">hidden</span><span class="body">扩展写入的 custom 条目（不进入模型上下文） <span class="note">· 默认隐藏，按 H 显示</span></span></div>
+            </div>
+          </div>
+
+          <div class="notice" style="margin-top:4px">
+            <span class="ic">◌</span>
+            <div>
+              <b style="color:var(--fg)">取不到的数据会明说</b>：
+              <span class="badge plain">响应正文</span> 由流式事件重建（钩子不提供原始字节）；
+              <span class="badge plain">请求 / 响应配对</span> 按会话内顺序关联（无共享请求 ID）；
+              <span class="badge plain">探针启动前的事件</span> 仅来自文件回填。
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ===== 请求 ===== -->
+      <div data-panel="requests">
+        <div class="rows">
+          <div class="row head request">
+            <span>#</span><span>provider / api / model</span><span>状态</span><span>时间</span>
+            <span class="num">输入</span><span class="num">输出</span><span class="num">payload</span><span class="num">成本</span>
+          </div>
+          <a class="row request hover" href="request.html"><span style="color:var(--fg-3)">11</span><span class="col-grow"><span style="color:var(--blue)">deepseek</span> <span class="faint">/ openai-completions /</span> deepseek-v4-pro <span class="badge ok">进行中</span></span><span><span class="badge ok">200</span></span><span class="time">21:04:58</span><span class="num">131K</span><span class="num faint">—</span><span class="num">131 KB</span><span class="num faint">—</span></a>
+          <a class="row request hover" href="request.html"><span style="color:var(--fg-3)">10</span><span class="col-grow"><span style="color:var(--blue)">deepseek</span> <span class="faint">/ openai-completions /</span> deepseek-v4-pro</span><span><span class="badge ok">200</span></span><span class="time">21:04:41</span><span class="num">128K</span><span class="num">480</span><span class="num">128 KB</span><span class="num" style="color:var(--amber)">0.04</span></a>
+          <a class="row request hover" href="request.html"><span style="color:var(--fg-3)">9</span><span class="col-grow"><span style="color:var(--blue)">deepseek</span> <span class="faint">/ openai-completions /</span> deepseek-v4-pro</span><span><span class="badge ok">200</span></span><span class="time">21:04:02</span><span class="num">124K</span><span class="num">620</span><span class="num">124 KB</span><span class="num" style="color:var(--amber)">0.03</span></a>
+          <a class="row request hover" href="request.html"><span style="color:var(--fg-3)">8</span><span class="col-grow"><span style="color:var(--blue)">deepseek</span> <span class="faint">/ openai-completions /</span> deepseek-v4-pro</span><span><span class="badge warn">429</span> <span class="faint">重试 1 次</span></span><span class="time">21:03:31</span><span class="num">121K</span><span class="num">—</span><span class="num">121 KB</span><span class="num faint">—</span></a>
+          <a class="row request hover" href="request.html"><span style="color:var(--fg-3)">7</span><span class="col-grow"><span style="color:var(--blue)">deepseek</span> <span class="faint">/ openai-completions /</span> deepseek-v4-pro</span><span><span class="badge ok">200</span></span><span class="time">21:03:29</span><span class="num">121K</span><span class="num">1.1K</span><span class="num">121 KB</span><span class="num" style="color:var(--amber)">0.05</span></a>
+        </div>
+        <div class="panel-body" style="border-top:1px solid var(--border)">
+          <div class="faint" style="font-size:11px">每次模型请求一行；重试会新增一行，不覆盖旧记录。payload 保存脱敏后的结构化请求体，单条上限 512 KB，7 天后清空为 <code>{ deleted: true }</code>，统计字段长期保留。</div>
+        </div>
+      </div>
+
+      <!-- ===== 工具 ===== -->
+      <div data-panel="tools" data-filters>
+        <div class="panel-body toolbar" style="border-bottom:1px solid var(--border)">
+          <div class="seg">
+            <button data-filter-group="tool" data-filter-value="all" class="on">全部</button>
+            <button data-filter-group="tool" data-filter-value="read">read</button>
+            <button data-filter-group="tool" data-filter-value="bash">bash</button>
+            <button data-filter-group="tool" data-filter-value="edit">edit</button>
+            <button data-filter-group="tool" data-filter-value="grep">grep</button>
+          </div>
+          <div class="seg">
+            <button data-filter-group="err" data-filter-value="all" class="on">全部结果</button>
+            <button data-filter-group="err" data-filter-value="1">仅出错</button>
+          </div>
+          <div class="seg">
+            <button data-filter-group="turn" data-filter-value="all" class="on">全部 Turn</button>
+            <button data-filter-group="turn" data-filter-value="9">9</button>
+            <button data-filter-group="turn" data-filter-value="10">10</button>
+            <button data-filter-group="turn" data-filter-value="11">11</button>
+          </div>
+          <label class="input" style="min-width:200px"><span style="color:var(--fg-3)">⌕</span><input data-search placeholder="搜索参数或结果…"></label>
+        </div>
+        <div class="rows" style="border-top:0">
+          <div class="row head toolrow"><span>工具 / 参数</span><span>Turn</span><span class="num">耗时</span><span>结果</span><span class="num">开始</span><span class="num">操作</span></div>
+          <a class="row toolrow hover" href="tool.html" data-row data-tool="read" data-turn="9" data-err="0"><span class="col-grow"><span style="color:var(--pink)">read</span> <span class="faint">{ path: "docs/prd-v0.2.md" }</span></span><span class="faint">9</span><span class="num">186 ms</span><span><span class="badge ok">成功</span></span><span class="num time">21:04:03</span><span class="num"><span class="btn sm">详情</span></span></a>
+          <a class="row toolrow hover" href="tool.html" data-row data-tool="grep" data-turn="9" data-err="0"><span class="col-grow"><span style="color:var(--pink)">grep</span> <span class="faint">{ pattern: "保留", path: "docs/" }</span></span><span class="faint">9</span><span class="num">92 ms</span><span><span class="badge ok">成功</span></span><span class="num time">21:04:04</span><span class="num"><span class="btn sm">详情</span></span></a>
+          <a class="row toolrow hover" href="tool.html" data-row data-tool="bash" data-turn="10" data-err="1"><span class="col-grow"><span style="color:var(--pink)">bash</span> <span class="faint">{ command: "pnpm run dev" }</span></span><span class="faint">10</span><span class="num">6.1 s</span><span><span class="badge err">失败</span></span><span class="num time">21:04:42</span><span class="num"><span class="btn sm">详情</span></span></a>
+          <a class="row toolrow hover" href="tool.html" data-row data-tool="edit" data-turn="10" data-err="0"><span class="col-grow"><span style="color:var(--pink)">edit</span> <span class="faint">{ path: "docs/prd-v0.2.md", 3 处替换 }</span></span><span class="faint">10</span><span class="num">310 ms</span><span><span class="badge ok">成功</span></span><span class="num time">21:04:55</span><span class="num"><span class="btn sm">详情</span></span></a>
+          <a class="row toolrow hover" href="tool.html" data-row data-tool="bash" data-turn="11" data-err="0"><span class="col-grow"><span style="color:var(--pink)">bash</span> <span class="faint">{ command: "git status --short" }</span></span><span class="faint">11</span><span class="num">64 ms</span><span><span class="badge ok">成功</span></span><span class="num time">21:05:01</span><span class="num"><span class="btn sm">详情</span></span></a>
+          <a class="row toolrow hover" href="tool.html" data-row data-tool="read" data-turn="11" data-err="0"><span class="col-grow"><span style="color:var(--pink)">read</span> <span class="faint">{ path: "prototype/index.html" }</span></span><span class="faint">11</span><span class="num">104 ms</span><span><span class="badge ok">成功</span></span><span class="num time">21:05:02</span><span class="num"><span class="btn sm">详情</span></span></a>
+          <div class="empty" data-empty style="display:none">没有匹配的工具调用。</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="notice readonly" style="margin-top:14px">
+    <span class="ic">◍</span>
+    <div>本页所有控件只影响显示：无处可删、无处可改。工具不会重放，会话不会被续写。</div>
+  </div>
+</div>
+
+<div class="statusbar">
+  <span class="item"><span class="dot-sm" style="color:var(--green)"></span>探针已连接</span>
+  <span class="item">最近推送 <span style="color:var(--fg)">2 秒前</span></span>
+  <span class="item">队列 <span style="color:var(--fg)">3 / 2000</span></span>
+  <span class="item">累计丢弃 <span style="color:var(--fg)">0</span></span>
+  <span class="spacer"></span>
+  <span class="item faint">真相源为会话 JSONL · 实时数据仅用于进行中的展示</span>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

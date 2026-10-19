@@ -536,6 +536,8 @@ SSE 事件类型：`session.updated`、`turn.updated`、`tool.updated`、`reques
 
 ## 11. 页面
 
+页面原型见 `prototype/`（多文件 HTML，可点击跳转，作为开发参考）。文件清单与改法见 `prototype/README.md`。
+
 ### 11.1 会话列表
 
 - 按项目分组，按 `last_activity_at` 倒序。

@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pi-observer · 会话 JSONL</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body data-page="jsonl">
+
+<div class="topbar">
+  <div class="brand"><span class="dot">●</span>pi-observer <span class="sub">只读</span></div>
+  <nav class="nav">
+    <a href="index.html">会话列表</a>
+    <a class="active" href="session.html">会话详情</a>
+    <a href="probe.html">探针状态</a>
+    <a href="style-guide.html">设计规范</a>
+  </nav>
+  <div class="spacer"></div>
+  <span class="probe-pill"><span class="pulse"></span>探针已连接 · 2 秒前</span>
+</div>
+
+<div class="page">
+
+  <div class="page-head">
+    <div class="title">
+      <div class="crumb"><a href="index.html">会话列表</a> / <a href="session.html">01a149bf</a> / JSONL</div>
+      <h1>会话文件原始条目</h1>
+    </div>
+    <div class="spacer"></div>
+    <span class="badge info">v3 格式</span>
+    <span class="badge">212 条</span>
+    <span class="badge plain">1.4 MB</span>
+  </div>
+
+  <div class="notice readonly">
+    <span class="ic">◍</span>
+    <div>这是真相源。看板按下面的规则读取，从不写入。</div>
+  </div>
+
+  <div class="panel" style="margin-top:14px">
+    <div class="panel-head"><span>读取规则</span><span class="count">按顺序执行</span></div>
+    <div class="rows">
+      <div class="row" style="grid-template-columns:28px 1fr 200px"><span class="faint">1</span><span>只消费以换行结尾的完整行；末尾不完整片段留在缓冲区，等下一次读取</span><code class="faint">缓冲 0 字节</code></div>
+      <div class="row" style="grid-template-columns:28px 1fr 200px"><span class="faint">2</span><span>每次读取前比较文件大小；<b>变小即视为整文件重写</b>（版本迁移、fork、clone），从头重读</span><code class="faint">当前偏移 1,412,006</code></div>
+      <div class="row" style="grid-template-columns:28px 1fr 200px"><span class="faint">3</span><span>按条目 <code>id</code> 去重，重写会让已消费内容再次出现</span><code class="faint">去重命中 0</code></div>
+      <div class="row" style="grid-template-columns:28px 1fr 200px"><span class="faint">4</span><span>无法解析的行跳过并记一条警告，不中断整个文件</span><code style="color:var(--amber)">警告 1</code></div>
+      <div class="row" style="grid-template-columns:28px 1fr 200px"><span class="faint">5</span><span>不加文件锁；与 Pi 的写入并存</span><code class="faint">只读打开</code></div>
+    </div>
+  </div>
+
+  <div class="session-layout" style="margin-top:14px">
+
+    <!-- 左：条目类型 -->
+    <div class="panel">
+      <div class="panel-head"><span>条目类型</span></div>
+      <div class="rows">
+        <div class="row" style="grid-template-columns:160px 1fr"><code style="color:var(--cyan)">session</code><span class="faint">首行，含 id / cwd / version / parentSession</span></div>
+        <div class="row" style="grid-template-columns:160px 1fr"><code style="color:var(--purple)">message</code><span class="faint">对话消息，id + parentId 构成树</span></div>
+        <div class="row" style="grid-template-columns:160px 1fr"><code style="color:var(--green)">model_change</code><span class="faint">会话中切换模型</span></div>
+        <div class="row" style="grid-template-columns:160px 1fr"><code style="color:var(--green)">thinking_level_change</code><span class="faint">切换思考等级</span></div>
+        <div class="row" style="grid-template-columns:160px 1fr"><code style="color:var(--amber)">usage</code><span class="faint">不计入上下文的用量（缓存预热等）</span></div>
+        <div class="row" style="grid-template-columns:160px 1fr"><code style="color:var(--amber)">compaction</code><span class="faint">压缩摘要与检查点</span></div>
+        <div class="row" style="grid-template-columns:160px 1fr"><code class="faint">context_edit</code><span class="faint">对更早条目的追加式修改</span></div>
+        <div class="row" style="grid-template-columns:160px 1fr"><code class="faint">branch_summary</code><span class="faint">切换分支时对旧分支的摘要</span></div>
+        <div class="row" style="grid-template-columns:160px 1fr"><code class="faint">custom</code><span class="faint">扩展写入的持久数据，不进模型上下文</span></div>
+        <div class="row" style="grid-template-columns:160px 1fr"><code class="faint">custom_message</code><span class="faint">扩展注入且进入上下文的消息</span></div>
+        <div class="row" style="grid-template-columns:160px 1fr"><code class="faint">label</code><span class="faint">用户书签</span></div>
+        <div class="row" style="grid-template-columns:160px 1fr"><code class="faint">session_info</code><span class="faint">会话显示名</span></div>
+      </div>
+    </div>
+
+    <!-- 右：原始行 -->
+    <div class="panel">
+      <div class="panel-head"><span>原始行</span><span class="count">显示最后 12 行</span></div>
+      <div class="rows">
+        <div class="row head" style="grid-template-columns:56px 160px 1fr 84px"><span class="num">行</span><span>类型</span><span>条目摘要</span><span class="num">字节</span></div>
+
+        <div class="row hover" style="grid-template-columns:56px 160px 1fr 84px"><span class="num faint">201</span><span><span class="etype message">message</span></span><span class="col-grow faint">user · 好，按 7 天改，顺便把 JSONL 页做出来</span><span class="num faint">96</span></div>
+        <div class="row hover" style="grid-template-columns:56px 160px 1fr 84px"><span class="num faint">202</span><span><span class="etype tool">toolResult</span></span><span class="col-grow faint">bash · 输出 1.9 KB</span><span class="num faint">1,942</span></div>
+        <div class="row hover" style="grid-template-columns:56px 160px 1fr 84px"><span class="num faint">203</span><span><span class="etype message">assistant</span></span><span class="col-grow faint">7 处替换已写入 prd-v0.2.md</span><span class="num faint">3,104</span></div>
+        <div class="row hover" style="grid-template-columns:56px 160px 1fr 84px"><span class="num faint">204</span><span><span class="etype message">assistant</span></span><span class="col-grow faint">toolCall edit</span><span class="num faint">412</span></div>
+        <div class="row hover" style="grid-template-columns:56px 160px 1fr 84px"><span class="num faint">205</span><span><span class="etype tool">toolResult</span></span><span class="col-grow faint">edit · ok</span><span class="num faint">88</span></div>
+        <div class="row hover" style="grid-template-columns:56px 160px 1fr 84px"><span class="num faint">206</span><span style="color:var(--green)">model_change</span><span class="col-grow faint">deepseek-v4-pro</span><span class="num faint">112</span></div>
+        <div class="row hover" style="grid-template-columns:56px 160px 1fr 84px"><span class="num faint">207</span><span style="color:var(--green)">thinking_level_change</span><span class="col-grow faint">medium</span><span class="num faint">74</span></div>
+        <div class="row hover" style="grid-template-columns:56px 160px 1fr 84px"><span class="num faint">208</span><span style="color:var(--amber)">compaction</span><span class="col-grow faint">压缩 21 条为摘要</span><span class="num faint">12,208</span></div>
+        <div class="row hover" style="grid-template-columns:56px 160px 1fr 84px"><span class="num faint">209</span><span class="faint">custom</span><span class="col-grow faint">probe-state · 扩展持久数据</span><span class="num faint">210</span></div>
+        <div class="row hover" style="grid-template-columns:56px 160px 1fr 84px"><span class="num faint">210</span><span class="faint">session_info</span><span class="col-grow faint">名称：pi-observer 原型</span><span class="num faint">64</span></div>
+        <div class="row hover" style="grid-template-columns:56px 160px 1fr 84px"><span class="num faint">211</span><span class="faint">label</span><span class="col-grow faint">书签：保留策略已定</span><span class="num faint">72</span></div>
+        <div class="row" style="grid-template-columns:56px 160px 1fr 84px;background:rgba(215,161,43,.05)"><span class="num faint">212</span><span style="color:var(--amber)">无法解析</span><span class="col-grow" style="color:var(--amber)">JSON 截断，已跳过并记一条警告</span><span class="num faint">318</span></div>
+      </div>
+
+      <details class="fold" open style="border-top:1px solid var(--border)">
+        <summary><span>第 203 行原文</span><span class="faint">3,104 字节</span></summary>
+        <div class="fold-body">
+          <div class="pre">{
+  <span class="hl-key">"id"</span>: <span class="hl-str">"msg_7c02de11"</span>,
+  <span class="hl-key">"parentId"</span>: <span class="hl-str">"msg_5a0c7731"</span>,
+  <span class="hl-key">"type"</span>: <span class="hl-str">"message"</span>,
+  <span class="hl-key">"message"</span>: {
+    <span class="hl-key">"role"</span>: <span class="hl-str">"assistant"</span>,
+    <span class="hl-key">"provider"</span>: <span class="hl-str">"deepseek"</span>,
+    <span class="hl-key">"model"</span>: <span class="hl-str">"deepseek-v4-pro"</span>,
+    <span class="hl-key">"api"</span>: <span class="hl-str">"openai-completions"</span>,
+    <span class="hl-key">"usage"</span>: { <span class="hl-key">"input"</span>: <span class="hl-num">131072</span>, <span class="hl-key">"output"</span>: <span class="hl-num">1432</span>, <span class="hl-key">"cost"</span>: { <span class="hl-key">"total"</span>: <span class="hl-num">0.0428</span> } },
+    <span class="hl-key">"durationMs"</span>: <span class="hl-num">4120</span>,
+    <span class="hl-key">"responseId"</span>: <span class="hl-str">"req_9f2c81ab"</span>,
+    <span class="hl-key">"stopReason"</span>: <span class="hl-str">"stop"</span>,
+    <span class="hl-key">"thinkingLevel"</span>: <span class="hl-str">"medium"</span>
+  }
+}</div>
+          <div class="faint" style="font-size:11px;margin-top:8px">token、成本、模型、provider、耗时、响应 ID 都在这里，不需要额外钩子。</div>
+        </div>
+      </details>
+    </div>
+  </div>
+</div>
+
+<div class="statusbar">
+  <span class="item"><span class="dot-sm" style="color:var(--green)"></span>探针已连接</span>
+  <span class="item">文件偏移 <span style="color:var(--fg)">1,412,006</span></span>
+  <span class="item">重写检测 <span style="color:var(--fg)">未发生</span></span>
+  <span class="item">解析警告 <span style="color:var(--amber)">1</span></span>
+  <span class="spacer"></span>
+  <span class="item faint">JSONL 是真相源 · 实时事件仅用于进行中的展示</span>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

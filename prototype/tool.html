@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pi-observer · 工具调用</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body data-page="tool">
+
+<div class="topbar">
+  <div class="brand"><span class="dot">●</span>pi-observer <span class="sub">只读</span></div>
+  <nav class="nav">
+    <a href="index.html">会话列表</a>
+    <a class="active" href="session.html">会话详情</a>
+    <a href="probe.html">探针状态</a>
+    <a href="style-guide.html">设计规范</a>
+  </nav>
+  <div class="spacer"></div>
+  <span class="probe-pill"><span class="pulse"></span>探针已连接 · 2 秒前</span>
+</div>
+
+<div class="page narrow">
+
+  <div class="page-head">
+    <div class="title">
+      <div class="crumb"><a href="index.html">会话列表</a> / <a href="session.html">01a149bf</a> / 工具调用</div>
+      <h1><span style="color:var(--pink)">bash</span> · pnpm run dev</h1>
+    </div>
+    <div class="spacer"></div>
+    <span class="badge err">失败 · exit 1</span>
+    <span class="badge">6.1 s</span>
+  </div>
+
+  <div class="panel">
+    <div class="panel-body" style="display:flex;gap:30px;flex-wrap:wrap">
+      <dl class="kv">
+        <dt>toolCallId</dt><dd><code>call_01a149bf_0018</code></dd>
+        <dt>父调用</dt><dd class="faint">无（顶层调用）</dd>
+        <dt>Turn</dt><dd><a href="session.html">Turn 10</a> · turnIndex 10</dd>
+        <dt>开始</dt><dd>2026-10-19 21:04:42</dd>
+      </dl>
+      <dl class="kv">
+        <dt>结束</dt><dd>2026-10-19 21:04:48</dd>
+        <dt>耗时</dt><dd>6,118 ms</dd>
+        <dt>参数大小</dt><dd>38 B</dd>
+        <dt>结果大小</dt><dd>1.9 KB（stdout + stderr）</dd>
+      </dl>
+      <dl class="kv">
+        <dt>isError</dt><dd><span class="badge err">true</span></dd>
+        <dt>来源</dt><dd><code>tool_execution_start</code> / <code>_update</code> / <code>_end</code></dd>
+        <dt>写入方式</dt><dd><code>tool_call_id</code> upsert</dd>
+        <dt>只读</dt><dd>不重放、不修改、不注入</dd>
+      </dl>
+    </div>
+  </div>
+
+  <div class="panel" data-tabgroup style="margin-top:14px">
+    <div class="tabs">
+      <button data-tab="args" class="on">参数</button>
+      <button data-tab="result">结果</button>
+      <button data-tab="link">关联</button>
+    </div>
+
+    <!-- 参数 -->
+    <div data-panel="args">
+      <div class="panel-body">
+        <div class="faint" style="font-size:11px;margin-bottom:8px">来自 <code>tool_execution_start.args</code>。完整参数在工具开始执行时就已确定，不依赖流式增量。</div>
+        <div class="pre">{
+  <span class="hl-key">"command"</span>: <span class="hl-str">"pnpm run dev"</span>,
+  <span class="hl-key">"timeout"</span>: <span class="hl-num">120000</span>,
+  <span class="hl-key">"description"</span>: <span class="hl-str">"启动开发服务器，检查是否报错"</span>
+}</div>
+      </div>
+    </div>
+
+    <!-- 结果 -->
+    <div data-panel="result">
+      <div class="panel-body">
+        <div class="notice err">
+          <span class="ic">✕</span>
+          <div><b style="color:var(--fg)">退出码 1</b>。stderr 与退出码一并记录；错误不会阻断后续 Turn，会话继续。</div>
+        </div>
+
+        <div class="label" style="margin:14px 0 6px">stdout</div>
+        <div class="pre"><span class="hl-dim">$ pnpm run dev</span>
+&gt; pi-web@0.1.0 dev
+&gt; next dev
+
+  ▲ Next.js 15.4.1
+  - Local:   http://localhost:3000
+  - ready in 1.2s</div>
+
+        <div class="label" style="margin:14px 0 6px">stderr</div>
+        <div class="pre err">Error: Module not found: Can't resolve 'refractor/all'
+  at /lib/prism-languages.ts:18:15
+
+  18 |   loading ??= import("refractor/all").then(
+     |                  ^^^^^^^^^^^^^^^^^^^^
+  19 |   () =&gt; {
+  20 |     loaded = true;
+  21 |   },
+
+Command exited with code 1</div>
+
+        <div class="notice" style="margin-top:14px">
+          <span class="ic">i</span>
+          <div>
+            执行过程中，<code>tool_execution_update</code> 按 <code>toolCallId</code> 覆盖同一行的 <code>partial_result</code>；
+            结束时 <code>tool_execution_end</code> 写入最终结果、<code>isError</code> 与 <code>durationMs</code>。
+            看板不会重放这次执行。
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 关联 -->
+    <div data-panel="link">
+      <div class="panel-body">
+        <dl class="kv" style="gap:8px 18px">
+          <dt>会话</dt><dd><a href="session.html">01a149bf-df78-7438-97d4-ee2d89d5e8ff</a></dd>
+          <dt>Turn</dt><dd><a href="session.html">Turn 10</a></dd>
+          <dt>同 Turn 的模型请求</dt><dd><a href="request.html">请求 #10</a></dd>
+          <dt>同 Turn 的其他工具</dt><dd class="faint">无</dd>
+          <dt>触发方式</dt><dd>assistant 消息中的 toolCall 块</dd>
+          <dt>后续</dt><dd>工具结果作为 <code>toolResult</code> 消息进入下一轮上下文</dd>
+        </dl>
+      </div>
+    </div>
+  </div>
+
+  <div class="notice readonly" style="margin-top:14px">
+    <span class="ic">◍</span>
+    <div>工具参数与结果只读展示。界面没有“重试”“停止”“编辑参数”之类的入口，这是刻意的。</div>
+  </div>
+</div>
+
+<div class="statusbar">
+  <span class="item"><span class="dot-sm" style="color:var(--green)"></span>探针已连接</span>
+  <span class="item">最近推送 <span style="color:var(--fg)">2 秒前</span></span>
+  <span class="item">队列 <span style="color:var(--fg)">3 / 2000</span></span>
+  <span class="spacer"></span>
+  <span class="item faint">工具结果按 toolCallId 幂等写入</span>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
