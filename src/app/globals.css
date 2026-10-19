@@ -812,6 +812,13 @@ details.fold .fold-body { padding: 0 12px 12px; }
    树里的条目是 nowrap + 省略号，未加这一条时整页会横向溢出（实测 1908px）并压住右侧时间线 */
 .session-layout > * { min-width: 0; }
 
+/* 会话行：摘要在前、状态与来源在后。摘要吃掉多余宽度，徽标永远不被挤出去
+   （只用 .col-grow 时，长摘要会把整串内容一起省略，状态就看不见了） */
+.session-summary { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.session-summary .txt { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.session-summary .sep,
+.session-summary .badge { flex: none; }
+
 /* 树一行的右侧灰字不参与收缩，否则「51.1 KB」会在窄列里被折成两行 */
 .node-line .meta { flex: none; white-space: nowrap; }
 

@@ -111,6 +111,27 @@ export interface MessageDetail {
   payload_bytes: number;
 }
 
+/**
+ * 会话列表的一行：会话本身 + 首条用户消息摘要。
+ * 会话文件头部没有会话名（实测只有 cwd / id / timestamp / type / version），
+ * 所以列表里的「摘要」只能取这一会话的第一条用户消息（PRD §11.1）。
+ */
+export interface SessionListItem extends SessionRow {
+  first_user_text: string | null;
+}
+
+/** 列表页概览条（PRD §11.1）。「今日」按服务器本地时区的今天 0 点算 */
+export interface OverviewStats {
+  events_today: number;
+  tokens_in_today: number;
+  tokens_out_today: number;
+  cost_today: number;
+  /** 探针累计丢弃（不是今日） */
+  dropped_total: number;
+  unreconciled_sessions: number;
+  last_reconciled_at: string | null;
+}
+
 /** 会话文件的读取进度（PRD §9.1） */
 export interface JsonlFileRow {
   path: string;

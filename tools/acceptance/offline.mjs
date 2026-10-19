@@ -651,6 +651,41 @@ try {
       assertIncludes(html, "5 条条目", "面板头给出条目数");
       return `单条接口给出原始条目（role 与 tokens 与文件一致），不存在的条目 404；首屏 HTML 含树、正文与分支标记`;
     });
+
+    // ── 档 A 续：M2-4 会话列表页 ────────────────────────────────────────────
+    await checks.check("A19", "会话列表：按项目分组、摘要取首条用户消息、回填会话标「未对账」", async () => {
+      const api = await getJson(`${bfBase}/api/sessions`);
+      assertEqual(api.status, 200, "列表接口状态码");
+      assertEqual(api.json.total, 1, "库里的会话总数");
+      assertEqual(api.json.count, 1, "列表行数");
+
+      const row = api.json.sessions[0];
+      assertIncludes(row.first_user_text ?? "", BF_MARKER, "列表行要带首条用户消息摘要");
+      assertEqual(row.source, "backfill", "来源仍是 backfill");
+
+      const stats = api.json.stats;
+      for (const key of [
+        "events_today",
+        "tokens_in_today",
+        "tokens_out_today",
+        "dropped_total",
+        "unreconciled_sessions",
+      ]) {
+        assertEqual(typeof stats[key], "number", `概览指标 ${key} 该是数字`);
+      }
+      assertEqual(stats.unreconciled_sessions, 1, "概览里的未对账会话数");
+
+      const page = await fetch(`${bfBase}/`);
+      const html = await page.text();
+      assertEqual(page.status, 200, "列表页状态码");
+      assertIncludes(html, BF_CWD, "分组头上的项目路径");
+      assertIncludes(html, BF_MARKER, "行里的首条用户消息摘要");
+      assertIncludes(html, "未对账", "回填会话的状态标记");
+      assertIncludes(html, "首条用户消息", "列头说明摘要来源");
+      assertIncludes(html, "今日事件", "概览条的指标");
+      assertIncludes(html, "共 1 个会话", "页头的会话总数");
+      return `1 行：摘要含用户正文、状态标未对账；概览指标齐全且未对账会话数 1`;
+    });
   } finally {
     await bfServer.stop();
   }

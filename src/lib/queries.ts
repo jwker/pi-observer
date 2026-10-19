@@ -1,11 +1,24 @@
 import { Db, getDb } from "./db.ts";
-import type { EventRow, MessageDetail, MessageIndexRow, ProbeStatusRow, SessionRow, ToolCallRow, TurnRow } from "./types.ts";
+import { localDayStartIso } from "./session-view.ts";
+import type {
+  EventRow,
+  MessageDetail,
+  MessageIndexRow,
+  OverviewStats,
+  ProbeStatusRow,
+  SessionListItem,
+  SessionRow,
+  ToolCallRow,
+  TurnRow,
+} from "./types.ts";
 
 export type {
   EventRow,
   MessageDetail,
   MessageIndexRow,
+  OverviewStats,
   ProbeStatusRow,
+  SessionListItem,
   SessionRow,
   ToolCallRow,
   TurnRow,
@@ -35,6 +48,70 @@ export function listSessions(db: Db = getDb(), limit = 200): SessionRow[] {
     )
     .all(limit) as unknown as SessionRow[];
   return rows.map(plain);
+}
+
+/**
+ * 会话列表（PRD §11.1）：会话本身 + 首条用户消息摘要。
+ *
+ * 文件头里没有会话名，`sessions.name` 只有实时路径将来可能填；列表要有一列能看出
+ * 「这个会话在做什么」，只能取第一条 `role=user` 的正文（截到 120 字符，行内还会再省略）。
+ */
+export function listSessionItems(limit = 200, db: Db = getDb()): SessionListItem[] {
+  const sessions = listSessions(db, limit);
+  const firstUserTexts = sessionFirstUserTexts(db);
+  return sessions.map((session) => ({
+    ...session,
+    first_user_text: firstUserTexts.get(session.session_id) ?? null,
+  }));
+}
+
+/** 每个会话第一条用户消息的摘要；没有用户消息的会话不在 Map 里 */
+function sessionFirstUserTexts(db: Db): Map<string, string | null> {
+  const rows = db
+    .prepare(
+      `SELECT m.session_id AS session_id, substr(m.text, 1, 120) AS text
+         FROM messages m
+         JOIN (
+                SELECT session_id, MIN(entry_index) AS first_index
+                  FROM messages
+                 WHERE kind = 'message' AND role = 'user'
+                 GROUP BY session_id
+              ) f
+           ON f.session_id = m.session_id AND f.first_index = m.entry_index
+        WHERE m.kind = 'message' AND m.role = 'user'`,
+    )
+    .all() as unknown as { session_id: string; text: string | null }[];
+  return new Map(rows.map((row) => [row.session_id, row.text]));
+}
+
+export function countSessions(db: Db = getDb()): number {
+  const row = db.prepare("SELECT COUNT(*) AS n FROM sessions").get() as { n: number };
+  return row.n;
+}
+
+/**
+ * 列表页概览条（PRD §11.1）。「今日」= 服务器本地时区的今天 0 点起：
+ *
+ *   - 今日事件：按 `events.received_at`（服务端收到的时间）——回填不写事件，所以这里只反映实时活动；
+ *   - 今日 token / 成本：按 `turns.started_at` 求和（实时与回填的 turn 都有开始时间）；
+ *   - 累计丢弃：探针自报的累计值，不是今日；
+ *   - 最近对账：`sessions.last_reconciled_at` 的最大值，M2-5 落地前一直是 NULL。
+ */
+export function overviewStats(db: Db = getDb(), now: Date = new Date()): OverviewStats {
+  const since = localDayStartIso(now);
+  const row = db
+    .prepare(
+      `SELECT
+         (SELECT COUNT(*) FROM events WHERE received_at >= ?)                   AS events_today,
+         (SELECT COALESCE(SUM(tokens_in), 0) FROM turns WHERE started_at >= ?)  AS tokens_in_today,
+         (SELECT COALESCE(SUM(tokens_out), 0) FROM turns WHERE started_at >= ?) AS tokens_out_today,
+         (SELECT COALESCE(SUM(cost), 0) FROM turns WHERE started_at >= ?)       AS cost_today,
+         COALESCE((SELECT dropped_count FROM probe_status WHERE id = 1), 0)    AS dropped_total,
+         (SELECT COUNT(*) FROM sessions WHERE source = 'backfill')              AS unreconciled_sessions,
+         (SELECT MAX(last_reconciled_at) FROM sessions)                         AS last_reconciled_at`,
+    )
+    .get(since, since, since, since) as unknown as OverviewStats;
+  return plain(row);
 }
 
 export function getSession(sessionId: string, db: Db = getDb()): SessionRow | null {
