@@ -44,6 +44,8 @@ session.html ──右上角 J JSONL──▶ jsonl.html
 
 改配色、字号、行高：只改 `styles.css` 顶部的 `:root`，所有页面同步生效。
 
+内容区宽度：顶栏、页面、页脚共用 `--page-max`（默认 1440px），宽屏下整体居中。想更窄或更宽只改这一个值；详情类页面用 `.page.narrow`（1040px）。
+
 ## 原型里的交互约定（`app.js`）
 
 | 属性 | 用法 |

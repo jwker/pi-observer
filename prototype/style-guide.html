@@ -9,15 +9,17 @@
 <body data-page="style-guide">
 
 <div class="topbar">
-  <div class="brand"><span class="dot">●</span>pi-observer <span class="sub">只读</span></div>
-  <nav class="nav">
-    <a href="index.html">会话列表</a>
-    <a href="session.html">会话详情</a>
-    <a href="probe.html">探针状态</a>
-    <a class="active" href="style-guide.html">设计规范</a>
-  </nav>
-  <div class="spacer"></div>
-  <span class="faint" style="font-size:11px">所有页面的取色与尺寸都来自 styles.css 顶部的 tokens</span>
+  <div class="topbar-inner">
+    <div class="brand"><span class="dot">●</span>pi-observer <span class="sub">只读</span></div>
+    <nav class="nav">
+      <a href="index.html">会话列表</a>
+      <a href="session.html">会话详情</a>
+      <a href="probe.html">探针状态</a>
+      <a class="active" href="style-guide.html">设计规范</a>
+    </nav>
+    <div class="spacer"></div>
+    <span class="faint" style="font-size:11px">所有页面的取色与尺寸都来自 styles.css 顶部的 tokens</span>
+  </div>
 </div>
 
 <div class="page">
@@ -292,12 +294,13 @@
 </div>
 
 <div class="statusbar">
-  <span class="item">设计 tokens 定义在 <span style="color:var(--fg)">prototype/styles.css</span></span>
-  <span class="item">交互在 <span style="color:var(--fg)">prototype/app.js</span></span>
-  <span class="spacer"></span>
-  <span class="item faint">改配色只需改一处</span>
+  <div class="statusbar-inner">
+    <span class="item">设计 tokens 定义在 <span style="color:var(--fg)">prototype/styles.css</span></span>
+    <span class="item">交互在 <span style="color:var(--fg)">prototype/app.js</span></span>
+    <span class="spacer"></span>
+    <span class="item faint">改配色只需改一处</span>
+  </div>
 </div>
-
 <script src="app.js"></script>
 </body>
 </html>

@@ -10,19 +10,21 @@
 
 <!-- ===================== 顶栏 ===================== -->
 <div class="topbar">
-  <div class="brand">
-    <span class="dot">●</span>pi-observer
-    <span class="sub">只读</span>
+  <div class="topbar-inner">
+    <div class="brand">
+      <span class="dot">●</span>pi-observer
+      <span class="sub">只读</span>
+    </div>
+    <nav class="nav">
+      <a class="active" href="index.html">会话列表</a>
+      <a href="probe.html">探针状态</a>
+      <a href="style-guide.html">设计规范</a>
+    </nav>
+    <div class="spacer"></div>
+    <span class="probe-pill" title="探针最近一次推送时间">
+      <span class="pulse"></span>探针已连接 · 2 秒前
+    </span>
   </div>
-  <nav class="nav">
-    <a class="active" href="index.html">会话列表</a>
-    <a href="probe.html">探针状态</a>
-    <a href="style-guide.html">设计规范</a>
-  </nav>
-  <div class="spacer"></div>
-  <span class="probe-pill" title="探针最近一次推送时间">
-    <span class="pulse"></span>探针已连接 · 2 秒前
-  </span>
 </div>
 
 <div class="page">
@@ -181,14 +183,15 @@
 
 <!-- ===================== 状态栏 ===================== -->
 <div class="statusbar">
-  <span class="item"><span class="dot-sm" style="color:var(--green)"></span>探针已连接</span>
-  <span class="item">最近推送 <span style="color:var(--fg)">2 秒前</span></span>
-  <span class="item">队列 <span style="color:var(--fg)">3 / 2000</span></span>
-  <span class="item">累计丢弃 <span style="color:var(--fg)">0</span></span>
-  <span class="spacer"></span>
-  <span class="item faint">数据仅存本机 127.0.0.1:4173</span>
+  <div class="statusbar-inner">
+    <span class="item"><span class="dot-sm" style="color:var(--green)"></span>探针已连接</span>
+    <span class="item">最近推送 <span style="color:var(--fg)">2 秒前</span></span>
+    <span class="item">队列 <span style="color:var(--fg)">3 / 2000</span></span>
+    <span class="item">累计丢弃 <span style="color:var(--fg)">0</span></span>
+    <span class="spacer"></span>
+    <span class="item faint">数据仅存本机 127.0.0.1:4173</span>
+  </div>
 </div>
-
 <script src="app.js"></script>
 </body>
 </html>

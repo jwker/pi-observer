@@ -47,6 +47,9 @@
 
   --pad: 16px;
   --row: 26px;
+
+  /* 内容区宽度：页面、顶栏、页脚共用，宽屏下居中显示 */
+  --page-max: 1440px;
 }
 
 /* --------------------------------------------------------------------------
@@ -117,14 +120,21 @@ code, kbd, pre { font-family: var(--mono); }
   position: sticky;
   top: 0;
   z-index: 20;
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  height: 46px;
   padding: 0 var(--pad);
   background: rgba(11, 13, 16, .92);
   backdrop-filter: blur(6px);
   border-bottom: 1px solid var(--border);
+}
+
+/* 顶栏与页脚的内容跟页面同宽并居中 */
+.topbar-inner {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  height: 46px;
+  width: 100%;
+  max-width: var(--page-max);
+  margin: 0 auto;
 }
 
 .brand {
@@ -180,7 +190,7 @@ code, kbd, pre { font-family: var(--mono); }
    页面骨架
    -------------------------------------------------------------------------- */
 
-.page { padding: 18px var(--pad) 60px; max-width: 1500px; }
+.page { padding: 18px var(--pad) 60px; max-width: var(--page-max); margin: 0 auto; }
 .page.narrow { max-width: 1040px; }
 
 .page-head {
@@ -715,13 +725,18 @@ details.fold .fold-body { padding: 0 12px 12px; }
   position: fixed;
   left: 0; right: 0; bottom: 0;
   z-index: 15;
+  padding: 0 var(--pad);
+  background: rgba(16, 20, 24, .96);
+  border-top: 1px solid var(--border);
+}
+.statusbar-inner {
   display: flex;
   align-items: center;
   gap: 16px;
   height: 28px;
-  padding: 0 var(--pad);
-  background: rgba(16, 20, 24, .96);
-  border-top: 1px solid var(--border);
+  width: 100%;
+  max-width: var(--page-max);
+  margin: 0 auto;
   font-size: 11px;
   color: var(--fg-2);
 }

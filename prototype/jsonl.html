@@ -9,15 +9,17 @@
 <body data-page="jsonl">
 
 <div class="topbar">
-  <div class="brand"><span class="dot">●</span>pi-observer <span class="sub">只读</span></div>
-  <nav class="nav">
-    <a href="index.html">会话列表</a>
-    <a class="active" href="session.html">会话详情</a>
-    <a href="probe.html">探针状态</a>
-    <a href="style-guide.html">设计规范</a>
-  </nav>
-  <div class="spacer"></div>
-  <span class="probe-pill"><span class="pulse"></span>探针已连接 · 2 秒前</span>
+  <div class="topbar-inner">
+    <div class="brand"><span class="dot">●</span>pi-observer <span class="sub">只读</span></div>
+    <nav class="nav">
+      <a href="index.html">会话列表</a>
+      <a class="active" href="session.html">会话详情</a>
+      <a href="probe.html">探针状态</a>
+      <a href="style-guide.html">设计规范</a>
+    </nav>
+    <div class="spacer"></div>
+    <span class="probe-pill"><span class="pulse"></span>探针已连接 · 2 秒前</span>
+  </div>
 </div>
 
 <div class="page">
@@ -117,14 +119,15 @@
 </div>
 
 <div class="statusbar">
-  <span class="item"><span class="dot-sm" style="color:var(--green)"></span>探针已连接</span>
-  <span class="item">文件偏移 <span style="color:var(--fg)">1,412,006</span></span>
-  <span class="item">重写检测 <span style="color:var(--fg)">未发生</span></span>
-  <span class="item">解析警告 <span style="color:var(--amber)">1</span></span>
-  <span class="spacer"></span>
-  <span class="item faint">JSONL 是真相源 · 实时事件仅用于进行中的展示</span>
+  <div class="statusbar-inner">
+    <span class="item"><span class="dot-sm" style="color:var(--green)"></span>探针已连接</span>
+    <span class="item">文件偏移 <span style="color:var(--fg)">1,412,006</span></span>
+    <span class="item">重写检测 <span style="color:var(--fg)">未发生</span></span>
+    <span class="item">解析警告 <span style="color:var(--amber)">1</span></span>
+    <span class="spacer"></span>
+    <span class="item faint">JSONL 是真相源 · 实时事件仅用于进行中的展示</span>
+  </div>
 </div>
-
 <script src="app.js"></script>
 </body>
 </html>
