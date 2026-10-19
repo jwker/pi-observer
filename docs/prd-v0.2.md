@@ -28,6 +28,18 @@
 | 探针约束 | 未写 | 独立一节，含队列上限与丢弃计数（D5） |
 | 验收 | 无 | 每个里程碑有可验证的完成判据 |
 
+### 0.1 已确认决策
+
+| 编号 | 决策 |
+|:--|:--|
+| C1 | 端口 `4173` |
+| C2 | 实时正文默认开启，可关闭 |
+| C3 | 看板自有库用 `node:sqlite` |
+| C4 | 不做会话删除、隐藏、重命名等写操作 |
+| C5 | payload 存脱敏后的全文（方案 A） |
+| C6 | payload 与事件只保留 7 天，到期自动清理，不设总量上限 |
+| C7 | 代码与文档纳入 git 版本控制 |
+
 ---
 
 ## 1. 定位与目标
@@ -395,7 +407,7 @@ Pi 的数据分散在两处，且没有统一界面：
 | `session_id` | TEXT | |
 | `request_seq` | INTEGER | 会话内自增 |
 | `provider` / `api` / `model` | TEXT | 从 payload 提取 |
-| `payload` | TEXT | 脱敏后的 JSON |
+| `payload` | TEXT | 脱敏后的 JSON；7 天后清空为 `{"deleted":true}` |
 | `payload_bytes` | INTEGER | 原始大小 |
 | `payload_truncated` | INTEGER | 是否截断 |
 | `status` | INTEGER NULL | 响应状态 |
@@ -459,11 +471,19 @@ CREATE INDEX idx_sessions_activity    ON sessions(last_activity_at DESC);
 
 ### 8.6 保留与清理
 
-| 数据 | 保留 | 方式 |
+| 数据 | 保留 | 到期处理 |
 |:--|:--|:--|
-| `events` | 30 天 | 服务启动时删除更早记录 |
-| `llm_requests.payload` | 7 天或总量 1 GB | 超限后把 payload 置为 `{"truncated":true}`，保留统计字段 |
-| 其余表 | 长期 | 随会话删除而删除 |
+| `llm_requests.payload` / `response_headers` | 7 天 | 清空为 `{"deleted":true}`；行、模型、字节数、状态码等统计字段保留 |
+| `events.payload` | 7 天 | 删除整行（该表只用于时间线） |
+| `sessions` / `runs` / `turns` / `tool_calls` | 长期 | 随会话删除而删除 |
+
+执行方式：
+
+- 服务启动时执行一次，之后每小时一次。
+- 判断依据：`llm_requests.created_at`、`events.received_at`。
+- 只做时间判断，不设总量上限（已确认）。
+- 每天执行一次 `VACUUM`，回收删除留下的空间。
+- 清理只删除看板库中的副本，不动 `~/.pi/agent/sessions/` 下的原始会话文件。
 
 ---
 
@@ -569,7 +589,7 @@ pi --extension /absolute/path/to/packages/probe
 |:--|:--|
 | 请求 payload 含系统提示与全部历史 | 默认脱敏；界面默认折叠，需点击展开 |
 | payload 含 `authorization`、`x-api-key` 等 | 按键名黑名单剔除；`before_provider_headers` 不订阅，从源头避免采集 headers |
-| payload 体积大 | 512 KB 上限，超出截断并标注 |
+| payload 体积大 | 单条 512 KB 上限，超出截断并标注；整条记录 7 天后清空正文 |
 | 任意网页向本机接口写数据 | `/api/ingest` 要求令牌；读取接口只读且无副作用 |
 | 局域网访问 | 只绑定 `127.0.0.1`；启动时校验监听地址 |
 | 看板库被当作真相源 | 界面上所有实时数据标注来源；对账以 JSONL 为准 |
@@ -617,7 +637,7 @@ pi --extension /absolute/path/to/packages/probe
 
 - 10 万条 `events` 下，会话详情页首屏 P95 小于 500 ms。
 - `agent_settled` 后 60 秒内状态从 `active` 转为 `idle`，不出现"永远生成中"。
-- 清理任务在启动时执行，30 天前的 `events` 被删除，7 天前的 payload 被置空。
+- 清理任务在启动时执行：7 天前的 `events` 行被删除，7 天前的 payload 被清空为 `{"deleted":true}`；会话文件不受影响。
 
 ---
 
@@ -629,7 +649,7 @@ pi --extension /absolute/path/to/packages/probe
 | 探针在流式中重启 | 正在生成的消息丢失尾部 | 对账从 JSONL 补齐；界面标注 |
 | 请求与响应无共享 ID | 并发时可能错配 | 目前假设串行；出现并发时标注 `serial_assumed` 并在界面提示 |
 | JSONL 整文件重写 | 读取位置失效 | 大小变小即重读；用条目 ID 去重 |
-| payload 体积与敏感内容 | 存储膨胀、泄露风险 | 脱敏 + 512 KB 上限 + 7 天保留 |
+| payload 体积与敏感内容 | 存储膨胀、泄露风险 | 脱敏 + 单条 512 KB 截断 + 7 天到期清空；不设总量上限，磁盘占用按周衡量 |
 | Node 版本过低 | `node:sqlite` 不可用 | 启动时检查版本并给出明确错误 |
 | Pi 升级导致事件契约变化 | 探针失效 | 记录所适配的 Pi 版本；升级后跑一遍 M1 验收 |
 | 多会话并发 | 事件交错、页面混乱 | 按会话分组；默认只展示最近活跃的若干会话 |
