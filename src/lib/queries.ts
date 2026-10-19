@@ -1,7 +1,18 @@
 import { Db, getDb } from "./db.ts";
-import type { EventRow, ProbeStatusRow, SessionRow, ToolCallRow, TurnRow } from "./types.ts";
+import type { EventRow, MessageDetail, MessageIndexRow, ProbeStatusRow, SessionRow, ToolCallRow, TurnRow } from "./types.ts";
 
-export type { EventRow, ProbeStatusRow, SessionRow, ToolCallRow, TurnRow } from "./types.ts";
+export type {
+  EventRow,
+  MessageDetail,
+  MessageIndexRow,
+  ProbeStatusRow,
+  SessionRow,
+  ToolCallRow,
+  TurnRow,
+} from "./types.ts";
+
+/** 树标签只显示前这么多字符；更长的正文在点击节点时按需取（`getMessageDetail`） */
+const SUMMARY_CHARS = 200;
 
 /**
  * `node:sqlite` 返回的是 null 原型对象。React 把这类对象从服务端组件传给客户端组件时会直接
@@ -105,6 +116,46 @@ export function listToolCalls(sessionId: string, limit = 200, db: Db = getDb()):
     )
     .all(sessionId, limit) as unknown as ToolCallRow[];
   return rows.map(plain);
+}
+
+/**
+ * 消息树的条目索引（PRD §11.2）：不带 payload，`text` 也截到 200 字符。
+ * 一个会话可能有很多条目，整页塞进 payload 会让首屏变得很大；全文点击时再取。
+ */
+export function listMessageIndex(sessionId: string, limit = 5000, db: Db = getDb()): MessageIndexRow[] {
+  const rows = db
+    .prepare(
+      `SELECT entry_id, parent_id, kind, role, timestamp, entry_index,
+              substr(text, 1, ${SUMMARY_CHARS}) AS summary,
+              COALESCE(LENGTH(payload), 0) AS payload_bytes
+         FROM messages WHERE session_id = ?
+        ORDER BY entry_index ASC
+        LIMIT ?`,
+    )
+    .all(sessionId, limit) as unknown as MessageIndexRow[];
+  return rows.map(plain);
+}
+
+/** 会话在库里的条目总数，用于如实说明树有没有被 `limit` 截断 */
+export function countMessages(sessionId: string, db: Db = getDb()): number {
+  const row = db.prepare("SELECT COUNT(*) AS n FROM messages WHERE session_id = ?").get(sessionId) as { n: number };
+  return row.n;
+}
+
+/** 单条条目的全文与原始 JSON（点击树节点时按需取） */
+export function getMessageDetail(sessionId: string, entryId: string, db: Db = getDb()): MessageDetail | null {
+  const row = db
+    .prepare(
+      `SELECT entry_id, kind, role, timestamp, entry_index, text,
+              COALESCE(LENGTH(payload), 0) AS payload_bytes, payload
+         FROM messages WHERE session_id = ? AND entry_id = ?`,
+    )
+    .get(sessionId, entryId) as unknown as Omit<MessageDetail, "payload"> & { payload: string | null } | undefined;
+  if (row === undefined) return null;
+  return plain({
+    ...row,
+    payload: row.payload === null ? null : safeParse(row.payload),
+  });
 }
 
 export function probeStatus(db: Db = getDb()): ProbeStatusRow | null {

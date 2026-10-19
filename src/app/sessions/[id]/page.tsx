@@ -1,12 +1,13 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
+import { MessageTree } from "@/components/message-tree.tsx";
 import { Timeline } from "@/components/timeline.tsx";
 import { ensureSessionBackfilled } from "@/lib/backfill.ts";
 import { dateTime, formatCost, formatTokens, relativeTime } from "@/lib/format.ts";
 import { getDb } from "@/lib/db.ts";
 import { log } from "@/lib/log.ts";
-import { getSession, listEvents, listTurns, probeStatus } from "@/lib/queries.ts";
+import { countMessages, getSession, listEvents, listMessageIndex, listTurns, probeStatus } from "@/lib/queries.ts";
 
 export const dynamic = "force-dynamic";
 
@@ -33,6 +34,9 @@ export default async function SessionPage({ params }: { params: Promise<{ id: st
 
   const events = listEvents(id, { limit: 2000 }, db);
   const turns = listTurns(id, 500, db);
+  // 消息树只取索引（不带 payload）：单条 payload 可以到 512 KB，整页塞进来首屏就废了
+  const messages = listMessageIndex(id, 5000, db);
+  const entryCount = countMessages(id, db);
   const probe = probeStatus(db);
   const state = STATE_LABELS[session.state] ?? STATE_LABELS.ended;
 
@@ -103,7 +107,8 @@ export default async function SessionPage({ params }: { params: Promise<{ id: st
         </div>
       </div>
 
-      <div style={{ marginTop: 14 }}>
+      <div className="session-layout" style={{ marginTop: 14 }}>
+        <MessageTree sessionId={id} initialMessages={messages} totalEntries={entryCount} />
         <Timeline sessionId={id} initialEvents={events} initialTurns={turns} />
       </div>
 
@@ -113,10 +118,9 @@ export default async function SessionPage({ params }: { params: Promise<{ id: st
           <b style={{ color: "var(--fg)" }}>取不到的数据会明说</b>：
           <span className="badge plain">响应正文</span> 由流式事件重建（钩子不给原始字节）；
           <span className="badge plain">请求 / 响应配对</span> 按会话内顺序关联（无共享请求 ID，M3 落地）；
-          <span className="badge plain">消息树与消息全文</span> 来自会话文件回填（M2 落地）；
+          <span className="badge plain">消息树与消息全文</span> 来自会话文件回填：树是落盘快照，正在生成的消息要等写进文件；
           <span className="badge plain">探针启动前的事件</span> 只能靠回填补齐。
-          当前页面是 M1 的原始事件流：首屏由服务端渲染，其后新事件经 SSE 追加，不刷新页面
-          （条数以时间线标题为准）。
+          右侧时间线首屏由服务端渲染，其后新事件经 SSE 追加，不刷新页面（条数以时间线标题为准）。
         </div>
       </div>
 

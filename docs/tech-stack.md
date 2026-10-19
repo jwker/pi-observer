@@ -87,6 +87,7 @@ pi-observer/
       redact.ts                 脱敏黑名单
       ingest.ts                 校验 → 事务 → upsert
       backfill.ts               JSONL 解析、重写检测、回填入库、对账
+      tree.ts                   消息树的父子结构、当前分支、过滤、图标（纯函数）
       retention.ts              7 天清理 + 空间回收
       sse.ts                    订阅表与广播
       log.ts                    单行 JSON 日志

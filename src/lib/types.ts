@@ -81,6 +81,36 @@ export interface MessageRow {
   payload: unknown;
 }
 
+/**
+ * 消息树的条目索引（PRD §11.2）：不含 payload，`summary` 截断到 200 字符只够树标签用。
+ * 全文与原始条目在点击节点时按需取，见 `MessageDetail`。
+ */
+export interface MessageIndexRow {
+  entry_id: string;
+  parent_id: string | null;
+  kind: string;
+  role: string | null;
+  timestamp: string | null;
+  entry_index: number;
+  summary: string | null;
+  /** `payload` 的字节数 */
+  payload_bytes: number;
+}
+
+/** 单条条目的全文（点击树节点时按需取） */
+export interface MessageDetail {
+  entry_id: string;
+  kind: string;
+  role: string | null;
+  timestamp: string | null;
+  entry_index: number;
+  /** 完整摘要：`message` 条目是正文，其他类型是一行说明（回填时截到 2 KB） */
+  text: string | null;
+  /** 原始条目 JSON；超过上限时是 `{"truncated":true,"bytes":N}` */
+  payload: unknown;
+  payload_bytes: number;
+}
+
 /** 会话文件的读取进度（PRD §9.1） */
 export interface JsonlFileRow {
   path: string;

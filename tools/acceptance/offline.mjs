@@ -601,6 +601,56 @@ try {
       assertEqual(counts.json.counts.sessions, 1, "幂等：sessions 仍是 1 个");
       return `无令牌 401；带令牌扫 1 个文件全部跳过；两次触发后 messages 5 / turns 2 不变`;
     });
+
+    // ── 档 A 续：M2-3 消息树 ────────────────────────────────────────────────
+    // 树用「索引行」渲染（不带 payload），点开某个节点才按需取全文。
+    await checks.check("A17", "消息树索引：只给索引行，父子关系与文件一致", async () => {
+      const list = await getJson(`${bfBase}/api/sessions/${BF_SID}/messages`);
+      assertEqual(list.status, 200, "索引接口状态码");
+      assertEqual(list.json.count, 5, "索引行数（A15 又追加了一条助手条目）");
+      assertEqual(list.json.total, 5, "条目总数（没有截断）");
+
+      const rows = list.json.messages;
+      assertEqual(
+        rows.map((r) => r.entry_id).join(","),
+        "bf-m1,bf-u1,bf-a1,bf-t1,bf-a2",
+        "条目按文件行号排序",
+      );
+      assertEqual(rows[0].kind, "model_change", "第一条条目的 kind");
+      assertEqual(rows[1].parent_id, null, "用户条目的 parent_id（文件里就是 null）");
+      assertEqual(rows[2].parent_id, "bf-u1", "助手条目的 parent_id");
+      assertEqual(rows[3].parent_id, "bf-a1", "工具结果条目的 parent_id");
+      assertEqual(rows[4].parent_id, "bf-t1", "补读进来的助手条目的 parent_id");
+      assert(rows.every((r) => r.payload === undefined), "索引行里不该带 payload（全文要点开才取）");
+      assertIncludes(rows[1].summary, BF_MARKER, "索引摘要含用户正文");
+      assert(rows[1].summary.length <= 200, `摘要该截到 200 字符，实际 ${rows[1].summary.length}`);
+      assert(rows[2].payload_bytes > 0, "助手条目应记录 payload 字节数");
+      return `5 条索引行；父链 bf-u1(根) → bf-a1 → bf-t1 → bf-a2，bf-m1 自成一个根；行内无 payload`;
+    });
+
+    await checks.check("A18", "点开节点取全文；页面首屏已经把树渲染出来", async () => {
+      const detail = await getJson(`${bfBase}/api/sessions/${BF_SID}/messages?entry=bf-a1`);
+      assertEqual(detail.status, 200, "单条详情接口状态码");
+      assertEqual(detail.json.message.entry_id, "bf-a1", "详情条目 id");
+      assertEqual(detail.json.message.kind, "message", "详情条目 kind");
+      assertEqual(detail.json.message.role, "assistant", "详情条目 role");
+      assertEqual(detail.json.message.payload.message.role, "assistant", "原始条目 JSON 里的 role");
+      assertEqual(detail.json.message.payload.message.usage.input, 11, "原始条目 JSON 里的 tokens_in");
+      assert((detail.json.message.text ?? "").length > 0, "详情该带正文摘要");
+
+      const missing = await fetch(`${bfBase}/api/sessions/${BF_SID}/messages?entry=bf-nope`);
+      assertEqual(missing.status, 404, "取不存在的条目应 404");
+
+      const page = await fetch(`${bfBase}/sessions/${BF_SID}`);
+      const html = await page.text();
+      assertEqual(page.status, 200, "详情页状态码");
+      assertIncludes(html, "消息树", "页面里有消息树面板");
+      assertIncludes(html, "node-line", "页面里有树节点");
+      assertIncludes(html, BF_MARKER, "树节点上能看到用户正文");
+      assertIncludes(html, "off-branch", "不在当前分支上的条目被标出来（bf-m1 的 parentId 是空的，自成一根）");
+      assertIncludes(html, "5 条条目", "面板头给出条目数");
+      return `单条接口给出原始条目（role 与 tokens 与文件一致），不存在的条目 404；首屏 HTML 含树、正文与分支标记`;
+    });
   } finally {
     await bfServer.stop();
   }
