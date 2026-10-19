@@ -5,9 +5,12 @@
  * 文件（`import.meta.url` 指向 `.next/server/...`）。内联成常量字符串就没有这个问题。
  *
  * 全部语句幂等（IF NOT EXISTS），schema 变更靠 `SCHEMA_VERSION` + `PRAGMA user_version`。
+ *
+ * 迁移策略：**只做增量**（新增表 / 新增索引），不写 ALTER。因为 CREATE TABLE IF NOT EXISTS
+ * 对已存在的表是空操作，所以「加一张表」这种变更天然幂等；要改列则必须先想清楚旧数据怎么办。
  */
 
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 export const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS sessions (
@@ -111,6 +114,33 @@ CREATE TABLE IF NOT EXISTS probe_status (
   probe_version  TEXT
 );
 
+-- 会话文件里的逐条条目（PRD §8.2 / §9.1）。消息树从 parent_id 渲染。
+-- kind 取 JSONL 条目的 type：message / model_change / thinking_level_change / usage /
+-- compaction / context_edit / branch_summary / custom / custom_message / label / session_info。
+CREATE TABLE IF NOT EXISTS messages (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id   TEXT NOT NULL,
+  entry_id     TEXT NOT NULL,
+  parent_id    TEXT,
+  kind         TEXT NOT NULL,
+  role         TEXT,
+  timestamp    TEXT,
+  entry_index  INTEGER NOT NULL DEFAULT 0,
+  text         TEXT,
+  payload      TEXT,
+  UNIQUE (session_id, entry_id)
+);
+
+-- 会话文件的读取进度（PRD §9.1）。没有这张表，每次启动都要把所有文件重读一遍。
+CREATE TABLE IF NOT EXISTS jsonl_files (
+  path          TEXT PRIMARY KEY,
+  session_id    TEXT,
+  size          INTEGER NOT NULL DEFAULT 0,
+  mtime_ms      INTEGER NOT NULL DEFAULT 0,
+  entry_count   INTEGER NOT NULL DEFAULT 0,
+  last_read_at  TEXT
+);
+
 CREATE INDEX IF NOT EXISTS idx_events_session_time ON events(session_id, received_at);
 CREATE INDEX IF NOT EXISTS idx_events_groups       ON events(session_id, run_seq, turn_index, id);
 CREATE INDEX IF NOT EXISTS idx_events_type         ON events(event_type);
@@ -120,4 +150,8 @@ CREATE INDEX IF NOT EXISTS idx_tools_session       ON tool_calls(session_id, sta
 CREATE INDEX IF NOT EXISTS idx_requests_session    ON llm_requests(session_id, request_seq);
 CREATE INDEX IF NOT EXISTS idx_requests_created    ON llm_requests(created_at);
 CREATE INDEX IF NOT EXISTS idx_sessions_activity   ON sessions(last_activity_at DESC);
+CREATE INDEX IF NOT EXISTS idx_messages_session    ON messages(session_id, entry_index);
+CREATE INDEX IF NOT EXISTS idx_messages_tree       ON messages(session_id, parent_id);
+CREATE INDEX IF NOT EXISTS idx_messages_kind       ON messages(session_id, kind);
+CREATE INDEX IF NOT EXISTS idx_jsonl_files_session ON jsonl_files(session_id);
 `;

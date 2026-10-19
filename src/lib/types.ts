@@ -66,3 +66,27 @@ export interface ProbeStatusRow {
   queue_depth: number;
   probe_version: string | null;
 }
+
+/** 会话文件里的一条条目（PRD §8.2 / §9.1）。消息树从 `parent_id` 渲染 */
+export interface MessageRow {
+  id: number;
+  session_id: string;
+  entry_id: string;
+  parent_id: string | null;
+  kind: string;
+  role: string | null;
+  timestamp: string | null;
+  entry_index: number;
+  text: string | null;
+  payload: unknown;
+}
+
+/** 会话文件的读取进度（PRD §9.1） */
+export interface JsonlFileRow {
+  path: string;
+  session_id: string | null;
+  size: number;
+  mtime_ms: number;
+  entry_count: number;
+  last_read_at: string | null;
+}

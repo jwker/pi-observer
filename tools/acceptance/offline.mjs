@@ -9,7 +9,7 @@
  *
  * 记录形状与 `ext/index.ts` 发出的完全一致——它就是「探针 ↔ 服务端」的唯一线上契约。
  */
-import { existsSync, rmSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import {
@@ -124,6 +124,59 @@ const envelope = (records) => ({
   records,
 });
 
+// ── M2-2 回填用的合成会话文件（形状取自真实的 v3 会话文件）────────────────
+const BF_SID = "accept-backfill-01";
+const BF_CWD = "/tmp/accept-backfill";
+/** 放进用户消息正文里，用来确认入库的是文件里的内容 */
+const BF_MARKER = "回填正文标记-ACCEPT-BACKFILL-TEXT";
+
+const bfLine = (value) => `${JSON.stringify(value)}\n`;
+
+/** 头部 + 改模型 + 用户提问 + 助手调工具 + 工具结果 */
+function bfInitialFile() {
+  return [
+    bfLine({ type: "session", version: 3, id: BF_SID, timestamp: "2026-10-19T08:00:00.000Z", cwd: BF_CWD }),
+    bfLine({ type: "model_change", id: "bf-m1", timestamp: "2026-10-19T08:00:01.000Z", modelId: "accept-model" }),
+    bfLine({
+      type: "message",
+      id: "bf-u1",
+      parentId: null,
+      timestamp: "2026-10-19T08:00:02.000Z",
+      message: { role: "user", content: [{ type: "text", text: BF_MARKER }] },
+    }),
+    bfLine({
+      type: "message",
+      id: "bf-a1",
+      parentId: "bf-u1",
+      timestamp: "2026-10-19T08:00:03.000Z",
+      message: {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "先跑一条命令" },
+          { type: "toolCall", id: "bf-call-1", name: "bash", arguments: { command: "echo hi" } },
+        ],
+        usage: { input: 11, output: 22, cacheRead: 33, cacheWrite: 44, cost: { total: 0.05 } },
+        stopReason: "toolUse",
+        thinkingLevel: "high",
+      },
+    }),
+    bfLine({
+      type: "message",
+      id: "bf-t1",
+      parentId: "bf-a1",
+      timestamp: "2026-10-19T08:00:04.000Z",
+      message: {
+        role: "toolResult",
+        toolCallId: "bf-call-1",
+        toolName: "bash",
+        content: [{ type: "text", text: "hi" }],
+        isError: false,
+        durationMs: 9,
+      },
+    }),
+  ].join("");
+}
+
 const dataDir = makeTempDir();
 const port = await freePort();
 const checks = new Checks("离线验收（档 A）");
@@ -133,6 +186,9 @@ const track = (id) => {
   postedEventIds.add(id);
   return id;
 };
+
+/** 除主实例外，回填那一段还会起第二个隔离实例；两个临时目录都要清掉 */
+const tempDirs = [dataDir];
 
 let server = null;
 let sse = null;
@@ -392,6 +448,162 @@ try {
     const realDb = join(REPO, "data", "observer.db");
     return `写入 ${join(dataDir, "observer.db")}；仓库里的 ${realDb} 是否参与：${existsSync(realDb) ? "存在但未被本次验收写入" : "不存在"}`;
   });
+
+  // ── 档 A 续：M2-2 回填入库 ────────────────────────────────────────────────
+  // 另起一个隔离实例，会话目录里**事先**放好一份会话文件：
+  // 启动扫描要在收到任何请求之前就把它入库，然后分别验证「进页面补读」与「手动触发」。
+  const bfDataDir = makeTempDir();
+  tempDirs.push(bfDataDir);
+  const bfSessions = join(bfDataDir, "sessions", "--tmp-accept-backfill--");
+  mkdirSync(bfSessions, { recursive: true });
+  const bfPath = join(bfSessions, `2026-10-19T08-00-00-000Z_${BF_SID}.jsonl`);
+  writeFileSync(bfPath, bfInitialFile(), "utf8");
+
+  const bfServer = await startServer({ dataDir: bfDataDir, port: await freePort() });
+  const bfBase = bfServer.base;
+  try {
+    await waitForHealth(bfBase);
+    // 令牌在第一次写入尝试时才生成（与 /api/ingest 一致）：先用一次不带令牌的请求把它逼出来，
+    // 顺便把「不带令牌被拒」这条判据记下来，稍后在 A16 里断言。
+    const denied = await fetch(`${bfBase}/api/backfill`, { method: "POST" });
+    const deniedStatus = denied.status;
+    const bfToken = await readToken(bfDataDir);
+
+    await checks.check("A14", "启动扫描：事先存在的会话文件已入库，字段与文件一致", async () => {
+      // 服务端在第一个请求之前就该扫完；这里轮询着等一下，避免依赖 register() 的时序细节
+      let count = 0;
+      for (let i = 0; i < 50 && count === 0; i += 1) {
+        const list = await getJson(`${bfBase}/api/sessions`);
+        count = list.json?.count ?? 0;
+        if (count === 0) await sleep(200);
+      }
+      assertEqual(count, 1, "启动扫描后的会话数（没有经过任何 HTTP 写入）");
+
+      const db = await openTempDb(bfDataDir);
+      try {
+        const session = db.prepare("SELECT * FROM sessions WHERE session_id = ?").get(BF_SID);
+        assertEqual(session.cwd, BF_CWD, "cwd（来自文件头部）");
+        assertEqual(session.version, 3, "version");
+        assertEqual(session.source, "backfill", "source");
+        assertEqual(session.state, "idle", "state（回填不推进状态）");
+        assertEqual(session.started_at, "2026-10-19T08:00:00.000Z", "started_at（文件头部时间）");
+        assertEqual(session.message_count, 3, "message_count");
+        assertEqual(session.turn_count, 1, "turn_count");
+        assertEqual(session.tool_call_count, 1, "tool_call_count");
+        assertEqual(session.tokens_in, 11, "tokens_in");
+        assertEqual(session.tokens_out, 22, "tokens_out");
+        assertEqual(session.cache_read, 33, "cache_read");
+        assertEqual(session.cache_write, 44, "cache_write");
+        assertEqual(session.cost, 0.05, "cost");
+
+        const messages = db
+          .prepare("SELECT entry_id, kind, role, entry_index, text FROM messages ORDER BY entry_index")
+          .all();
+        assertEqual(messages.length, 4, "messages 行数（全部条目，含 model_change）");
+        assertEqual(messages[0].kind, "model_change", "第一条条目的 kind");
+        assertEqual(messages[0].entry_index, 2, "第一条条目的行号");
+        assertEqual(messages[2].role, "assistant", "助手条目 role");
+        assertIncludes(messages[1].text ?? "", BF_MARKER, "用户条目摘要含正文");
+
+        const turn = db.prepare("SELECT * FROM turns WHERE message_entry_id = 'bf-a1'").get();
+        assert(turn !== undefined && turn !== null, "库里没有 bf-a1 的 turn");
+        assertEqual(turn.run_seq, 1, "回填的 run_seq 占位值");
+        assertEqual(turn.turn_index, 0, "turn_index");
+        assertEqual(turn.stop_reason, "toolUse", "stop_reason");
+        assertEqual(turn.thinking_level, "high", "thinking_level");
+        assertEqual(turn.tokens_in, 11, "turn tokens_in");
+
+        const tool = db.prepare("SELECT * FROM tool_calls WHERE tool_call_id = 'bf-call-1'").get();
+        assert(tool !== undefined && tool !== null, "库里没有 bf-call-1 的工具调用");
+        assertEqual(tool.tool_name, "bash", "tool_name");
+        assertEqual(JSON.parse(tool.args).command, "echo hi", "工具参数");
+        assertEqual(tool.is_error, 0, "is_error");
+        assertEqual(tool.duration_ms, 9, "duration_ms（来自工具结果条目）");
+
+        assertEqual(db.prepare("SELECT COUNT(*) AS n FROM jsonl_files").get().n, 1, "jsonl_files 行数");
+
+        const log = bfServer.tailLog(40);
+        assertIncludes(log, "启动扫描完成", "服务端日志里的启动扫描记录");
+        return `4 条条目 / 1 个 turn / 1 次工具调用入库；来源 backfill，state 保持 idle，日志含启动扫描`;
+      } finally {
+        db.close();
+      }
+    });
+
+    await checks.check("A15", "进页面补读：页面请求会把启动之后新增的内容补上", async () => {
+      const marker2 = "页面补读标记-ACCEPT-BACKFILL-PAGE";
+      appendFileSync(
+        bfPath,
+        bfLine({
+          type: "message",
+          id: "bf-a2",
+          parentId: "bf-t1",
+          timestamp: "2026-10-19T08:00:05.000Z",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: marker2 }],
+            usage: { input: 5, output: 6, cost: { total: 0.01 } },
+            stopReason: "stop",
+          },
+        }),
+        "utf8",
+      );
+
+      // 先确认这一条还没入库——否则下面的断言说明不了是页面触发的
+      const before = await openTempDb(bfDataDir);
+      const beforeCount = before.prepare("SELECT COUNT(*) AS n FROM messages").get().n;
+      before.close();
+      assertEqual(beforeCount, 4, "补读之前 messages 行数");
+
+      const response = await fetch(`${bfBase}/sessions/${BF_SID}`);
+      const html = await response.text();
+      assertEqual(response.status, 200, "GET /sessions/<回填会话> 状态码");
+      assertIncludes(html, BF_SID, "详情页 HTML 中的会话 id");
+      assertIncludes(html, BF_CWD, "详情页 HTML 中的工作目录");
+
+      const db = await openTempDb(bfDataDir);
+      try {
+        assertEqual(db.prepare("SELECT COUNT(*) AS n FROM messages").get().n, 5, "补读之后 messages 行数");
+        assertEqual(db.prepare("SELECT COUNT(*) AS n FROM turns").get().n, 2, "补读之后 turns 行数");
+        const session = db.prepare("SELECT message_count, turn_count, tokens_in FROM sessions WHERE session_id = ?").get(BF_SID);
+        assertEqual(session.message_count, 4, "补读之后 message_count");
+        assertEqual(session.turn_count, 2, "补读之后 turn_count");
+        assertEqual(session.tokens_in, 16, "补读之后 tokens_in");
+        return `页面请求前 4 条 → 请求后 5 条条目 / 2 个 turn，且页面返回 200`;
+      } finally {
+        db.close();
+      }
+    });
+
+    await checks.check("A16", "手动触发回填：要令牌、幂等、没变的文件跳过", async () => {
+      assertEqual(deniedStatus, 401, "不带令牌触发回填的状态码");
+
+      const first = await fetch(`${bfBase}/api/backfill`, {
+        method: "POST",
+        headers: { "x-observer-token": bfToken },
+      });
+      const firstJson = await first.json();
+      assertEqual(first.status, 200, "带令牌触发回填的状态码");
+      assertEqual(firstJson.ok, true, "回填响应 ok");
+      assertEqual(firstJson.summary.files, 1, "扫到的文件数");
+      assertEqual(firstJson.summary.skipped, 1, "本次应跳过 1 个文件（A15 已经读过）");
+      assertEqual(firstJson.summary.entries, 0, "跳过时不应产出条目");
+
+      const second = await fetch(`${bfBase}/api/backfill`, {
+        method: "POST",
+        headers: { "x-observer-token": bfToken },
+      });
+      assertEqual(second.status, 200, "第二次触发的状态码");
+
+      const counts = await getJson(`${bfBase}/api/backfill`);
+      assertEqual(counts.json.counts.messages, 5, "幂等：messages 仍是 5 条");
+      assertEqual(counts.json.counts.turns, 2, "幂等：turns 仍是 2 个");
+      assertEqual(counts.json.counts.sessions, 1, "幂等：sessions 仍是 1 个");
+      return `无令牌 401；带令牌扫 1 个文件全部跳过；两次触发后 messages 5 / turns 2 不变`;
+    });
+  } finally {
+    await bfServer.stop();
+  }
 } catch (error) {
   console.error(`\n验收中断：${error.message}`);
   process.exitCode = 1;
@@ -402,8 +614,8 @@ try {
   if (!ok) process.exitCode = 1;
   if (ok && process.exitCode === undefined) {
     // 通过就清掉临时目录，别在 $TMPDIR 里堆垃圾
-    rmSync(dataDir, { recursive: true, force: true });
+    for (const dir of tempDirs) rmSync(dir, { recursive: true, force: true });
   } else {
-    console.log(`· 临时目录保留在 ${dataDir}（服务端日志：${server?.logPath ?? "-"}）`);
+    console.log(`· 临时目录保留在 ${tempDirs.join("、")}（服务端日志：${server?.logPath ?? "-"}）`);
   }
 }

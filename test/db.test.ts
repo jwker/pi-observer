@@ -22,14 +22,16 @@ function tableNames(db: Db): string[] {
   return rows.map((row) => row.name);
 }
 
-test("建库：7 张表 + user_version + WAL", () => {
+test("建库：9 张表 + user_version + WAL", () => {
   const { path, cleanup } = tempDbPath();
   const db = openDb(path);
   try {
     const tables = tableNames(db).filter((name) => !name.startsWith("sqlite_"));
     assert.deepEqual(tables, [
       "events",
+      "jsonl_files",
       "llm_requests",
+      "messages",
       "probe_status",
       "runs",
       "sessions",

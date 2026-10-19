@@ -2,8 +2,10 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { Timeline } from "@/components/timeline.tsx";
+import { ensureSessionBackfilled } from "@/lib/backfill.ts";
 import { dateTime, formatCost, formatTokens, relativeTime } from "@/lib/format.ts";
 import { getDb } from "@/lib/db.ts";
+import { log } from "@/lib/log.ts";
 import { getSession, listEvents, listTurns, probeStatus } from "@/lib/queries.ts";
 
 export const dynamic = "force-dynamic";
@@ -16,6 +18,15 @@ const STATE_LABELS: Record<string, { label: string; className: string }> = {
 
 export default async function SessionPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
+
+  // 进页面补读（PRD §9.1）：库里没有、或者文件在启动扫描之后又长了，都在这里补上。
+  // 文件没变时这一次调用只是两次 stat，很便宜；失败也不挡页面。
+  try {
+    ensureSessionBackfilled(id);
+  } catch (error) {
+    log("warn", "backfill", "进页面补读失败", { session_id: id, error: (error as Error).message });
+  }
+
   const db = getDb();
   const session = getSession(id, db);
   if (!session) notFound();

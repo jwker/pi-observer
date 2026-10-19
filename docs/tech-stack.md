@@ -83,10 +83,10 @@ pi-observer/
     lib/                        纯逻辑，不依赖 Next（可被 node --test 直接跑）
       config.ts                 配置与默认值
       db.ts                     打开库、PRAGMA、user_version 迁移（server-only）
-      schema.sql                建表与索引
+      schema.ts                 建表与索引（内联 DDL，不用 .sql 文件）
       redact.ts                 脱敏黑名单
       ingest.ts                 校验 → 事务 → upsert
-      backfill.ts               JSONL 解析、重写检测、对账
+      backfill.ts               JSONL 解析、重写检测、回填入库、对账
       retention.ts              7 天清理 + 空间回收
       sse.ts                    订阅表与广播
       log.ts                    单行 JSON 日志
@@ -499,7 +499,7 @@ db.exec("PRAGMA journal_mode = WAL");
 db.exec("PRAGMA synchronous = NORMAL");   // WAL 下的常规选择
 // 若要用增量回收，必须在建表前设置：
 // db.exec("PRAGMA auto_vacuum = INCREMENTAL");
-db.exec(readFileSync("src/lib/schema.sql", "utf8"));
+db.exec(SCHEMA_SQL);  // src/lib/schema.ts 里的内联 DDL（构建后读不到相对路径的 .sql）
 // 迁移：PRAGMA user_version（实测可读写，本例 0 → 1）
 
 // 每天一次的空间回收（PRD §8.6）

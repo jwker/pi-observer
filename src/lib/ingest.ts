@@ -411,24 +411,7 @@ export function applyBatch(batch: IngestBatch, db: Db = getDb()): IngestResponse
     }
 
     // 会话聚合与活跃时间：按受影响会话重算，避免增量计数漂移。
-    // `message_count` 在 M1 的含义是「探针观察到 message_start 的次数」（含 system / user /
-    // assistant / toolResult），M2 的回填会用会话文件里的条数覆盖它。
-    const refreshSession = db.prepare(`
-      UPDATE sessions SET
-        message_count = (SELECT COUNT(*) FROM events
-                          WHERE session_id = sessions.session_id AND event_type = 'message_start'),
-        turn_count = (SELECT COUNT(*) FROM turns WHERE session_id = sessions.session_id),
-        tool_call_count = (SELECT COUNT(*) FROM tool_calls WHERE session_id = sessions.session_id),
-        tokens_in = (SELECT COALESCE(SUM(tokens_in), 0) FROM turns WHERE session_id = sessions.session_id),
-        tokens_out = (SELECT COALESCE(SUM(tokens_out), 0) FROM turns WHERE session_id = sessions.session_id),
-        cost = (SELECT COALESCE(SUM(cost), 0) FROM turns WHERE session_id = sessions.session_id),
-        last_activity_at = COALESCE(
-          (SELECT MAX(received_at) FROM events WHERE session_id = sessions.session_id),
-          sessions.last_activity_at
-        )
-      WHERE session_id = ?
-    `);
-    for (const sessionId of touched) refreshSession.run(sessionId);
+    for (const sessionId of touched) refreshSessionAggregates(db, sessionId);
 
     // 探针状态（单行）
     db.prepare(`
@@ -460,4 +443,44 @@ export function applyBatch(batch: IngestBatch, db: Db = getDb()): IngestResponse
   });
 
   return { ok: true, accepted: batch.records.length, applied, rejected: 0 };
+}
+
+/**
+ * 重算一个会话的聚合列（PRD §8.4）。实时写入与文件回填共用这一份定义，
+ * 否则两条路径会给出不一致的计数。
+ *
+ * 三处需要解释的取值：
+ *
+ * 1. `message_count` 取「实时事件数」与「文件条目数」的**较大值**。
+ *    两个来源都只是下界：探针可能漏收（比如启动前就有消息），文件可能滞后于实时。
+ *    PRD §14 M2 要求「消息数与 Pi 自带的 /tree 一致」，所以文件回填之后以文件为准。
+ *
+ * 2. `turn_count` / `tool_call_count` / token / 成本都从 turns 与 tool_calls 表求和，
+ *    这两张表的持久键（`message_entry_id`、`tool_call_id`）在实时与回填之间是同一个，
+ *    所以两条路径 upsert 到同一行，求和不会重复计算。
+ *
+ * 3. `last_activity_at` 取事件接收时间与文件条目时间戳的较晚者；
+ *    纯回填的会话没有事件，只能靠文件时间戳。
+ */
+export function refreshSessionAggregates(db: Db, sessionId: string): void {
+  db.prepare(`
+    UPDATE sessions SET
+      message_count = MAX(
+        (SELECT COUNT(*) FROM events
+          WHERE session_id = sessions.session_id AND event_type = 'message_start'),
+        (SELECT COUNT(*) FROM messages
+          WHERE session_id = sessions.session_id AND kind = 'message')
+      ),
+      turn_count = (SELECT COUNT(*) FROM turns WHERE session_id = sessions.session_id),
+      tool_call_count = (SELECT COUNT(*) FROM tool_calls WHERE session_id = sessions.session_id),
+      tokens_in = (SELECT COALESCE(SUM(tokens_in), 0) FROM turns WHERE session_id = sessions.session_id),
+      tokens_out = (SELECT COALESCE(SUM(tokens_out), 0) FROM turns WHERE session_id = sessions.session_id),
+      cost = (SELECT COALESCE(SUM(cost), 0) FROM turns WHERE session_id = sessions.session_id),
+      last_activity_at = COALESCE(
+        (SELECT MAX(received_at) FROM events WHERE session_id = sessions.session_id),
+        (SELECT MAX(timestamp) FROM messages WHERE session_id = sessions.session_id),
+        sessions.last_activity_at
+      )
+    WHERE session_id = ?
+  `).run(sessionId);
 }

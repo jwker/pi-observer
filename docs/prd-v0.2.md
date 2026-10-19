@@ -452,6 +452,33 @@ Pi 的数据分散在两处，且没有统一界面：
 | `queue_depth` | INTEGER | 上报时的队列深度 |
 | `probe_version` | TEXT | |
 
+**messages**（会话文件里的每一条条目，见 §9.1）
+
+| 列 | 类型 | 说明 |
+|:--|:--|:--|
+| `id` | INTEGER PK | |
+| `session_id` | TEXT | |
+| `entry_id` | TEXT | 条目的 `id`；极少数没有 id 的条目用 `#line:<行号>` 兜底 |
+| `parent_id` | TEXT NULL | 消息树的边 |
+| `kind` | TEXT | 条目的 `type`：`message` / `model_change` / `thinking_level_change` / `usage` / `compaction` / `context_edit` / `branch_summary` / `custom` / `custom_message` / `label` / `session_info` |
+| `role` | TEXT NULL | 只有 `message` 条目有：`user` / `assistant` / `system` / `toolResult` |
+| `timestamp` | TEXT NULL | 条目自带时间 |
+| `entry_index` | INTEGER | 条目在文件里的行号（同一秒的条目靠它排序） |
+| `text` | TEXT NULL | 可读摘要：`message` 是正文，其他类型是一行说明；截到 2 KB |
+| `payload` | TEXT NULL | 原始条目 JSON；超过上限截断为 `{"truncated":true,"bytes":N}` |
+
+约束：`UNIQUE(session_id, entry_id)`。
+
+**jsonl_files**（会话文件的读取进度，见 §9.1）
+
+| 列 | 类型 | 说明 |
+|:--|:--|:--|
+| `path` | TEXT PK | JSONL 绝对路径 |
+| `session_id` | TEXT NULL | 头部声明的 id |
+| `size` / `mtime_ms` | INTEGER | 上次读取**之前**看到的大小与修改时间 |
+| `entry_count` | INTEGER | 该会话已入库的条目数（排查用） |
+| `last_read_at` | TEXT | |
+
 ### 8.3 键与写入语义
 
 | 表 | 唯一键 | 写入方式 |
@@ -462,6 +489,8 @@ Pi 的数据分散在两处，且没有统一界面：
 | `llm_requests` | `(session_id, request_seq)` | 同上 |
 | `sessions` | `session_id` | 同上 |
 | `runs` | `(session_id, run_seq)` | 同上 |
+| `messages` | `(session_id, entry_id)` | 同上（回填写入） |
+| `jsonl_files` | `path` | 同上（回填的读取进度） |
 
 ### 8.4 写入策略
 
@@ -474,11 +503,18 @@ Pi 的数据分散在两处，且没有统一界面：
 
 ```sql
 CREATE INDEX idx_events_session_time ON events(session_id, received_at);
-CREATE INDEX idx_events_type          ON events(event_type);
-CREATE INDEX idx_turns_session        ON turns(session_id, run_seq, turn_index);
-CREATE INDEX idx_tools_session        ON tool_calls(session_id, started_at);
-CREATE INDEX idx_requests_session     ON llm_requests(session_id, request_seq);
-CREATE INDEX idx_sessions_activity    ON sessions(last_activity_at DESC);
+CREATE INDEX idx_events_groups       ON events(session_id, run_seq, turn_index, id);
+CREATE INDEX idx_events_type         ON events(event_type);
+CREATE INDEX idx_events_received     ON events(received_at);
+CREATE INDEX idx_turns_session       ON turns(session_id, run_seq, turn_index);
+CREATE INDEX idx_tools_session       ON tool_calls(session_id, started_at);
+CREATE INDEX idx_requests_session    ON llm_requests(session_id, request_seq);
+CREATE INDEX idx_requests_created    ON llm_requests(created_at);
+CREATE INDEX idx_sessions_activity   ON sessions(last_activity_at DESC);
+CREATE INDEX idx_messages_session    ON messages(session_id, entry_index);
+CREATE INDEX idx_messages_tree       ON messages(session_id, parent_id);
+CREATE INDEX idx_messages_kind       ON messages(session_id, kind);
+CREATE INDEX idx_jsonl_files_session ON jsonl_files(session_id);
 ```
 
 ### 8.6 保留与清理
@@ -487,7 +523,8 @@ CREATE INDEX idx_sessions_activity    ON sessions(last_activity_at DESC);
 |:--|:--|:--|
 | `llm_requests.payload` / `response_headers` | 7 天 | 清空为 `{"deleted":true}`；行、模型、字节数、状态码等统计字段保留 |
 | `events.payload` | 7 天 | 删除整行（该表只用于时间线） |
-| `sessions` / `runs` / `turns` / `tool_calls` | 长期 | 随会话删除而删除 |
+| `sessions` / `runs` / `turns` / `tool_calls` / `messages` | 长期 | 随会话删除而删除 |
+| `jsonl_files` | 长期 | 只是读取进度（一行几十字节）；指向的文件被删掉后可清掉对应行 |
 
 执行方式：
 
@@ -503,9 +540,23 @@ CREATE INDEX idx_sessions_activity    ON sessions(last_activity_at DESC);
 
 ### 9.1 回填
 
-- 触发：服务启动时扫描一次；页面进入会话时若无记录则补读。
-- 范围：`~/.pi/agent/sessions/` 下所有会话目录。
-- 内容：解析 JSONL，写入 `sessions`、`turns`、`tool_calls`，并汇总 token、成本、计数。
+- 触发：
+  - 服务启动时扫描一次（`src/instrumentation.ts`，只扫 `.jsonl`）；
+  - 进入会话页面时补读（库里没有该会话、或文件在启动扫描之后又长了）；
+  - `POST /api/backfill` 可手动触发（写接口，与 `/api/ingest` 一样要令牌；`?session=<id>` 只补一个）。
+- 范围：`~/.pi/agent/sessions/` 下所有会话目录，含子目录。
+- 内容：
+  - `messages`：文件里的**每一条**条目都入库，用 `kind` 区分类型（`message` / `model_change` / `thinking_level_change` / `compaction` / …），`parent_id` 保留消息树的边；
+  - `sessions`：从头部取 `session_id` / `cwd` / `version` / `parent_session` / `started_at`，并汇总 token、成本、计数；
+  - `turns`：每个助手条目一个 turn（持久键 `message_entry_id`），token 与成本取自该条目的 `usage`，`tool_results` 取自它的工具结果子条目；
+  - `tool_calls`：调用参数来自助手条目里的 `toolCall` 部分，结果 / 是否出错 / 耗时来自对应的工具结果条目；
+  - `jsonl_files`：记下「读之前」的文件大小与修改时间，两者都没变就跳过，下次启动不必把历史重读一遍。
+- 幂等：全部按持久键 upsert，与实时路径落到同一行（§9.3）。
+- 不猜：
+  - `runs` 不建行——run 的边界只存在于实时事件里（进程启动/结束），文件里没有；
+  - `turns.run_seq` 回填时是占位值 `1`（整个文件当作一个 run），实时写入后用探针观察到的真值覆盖；`turn_index` 按文件顺序推导；
+  - `sessions.state` 不推进（回填只把新会话标成 `idle`），`name` 不写；
+  - 回填过的会话，`source` 由 `live` 变为 `merged`。
 
 ### 9.2 JSONL 解析规则（必须遵守）
 
@@ -666,6 +717,7 @@ pi --extension /absolute/path/to/pi-observer/ext
 | 探针在流式中重启 | 正在生成的消息丢失尾部 | 对账从 JSONL 补齐；界面标注 |
 | 请求与响应无共享 ID | 并发时可能错配 | 目前假设串行；出现并发时标注 `serial_assumed` 并在界面提示 |
 | JSONL 整文件重写 | 读取位置失效 | 大小变小即重读；用条目 ID 去重 |
+| 同一条目 id 出现在两个会话文件里 | `turns`（`message_entry_id`）与 `tool_calls`（`tool_call_id`）的持久键是全局唯一，回填后到的那份会写到先到的那一行 | 实测 Pi 的 `newSession`（fork / clone，`parentSession` 记录血缘）只写一个新的 `session` 头部、不复制条目 id（`session-manager.js` 已核），所以正常路径不会发生；手工复制会话文件属于已知边界 |
 | payload 体积与敏感内容 | 存储膨胀、泄露风险 | 脱敏 + 单条 512 KB 截断 + 7 天到期清空；不设总量上限，磁盘占用按周衡量 |
 | Node 版本过低 | `node:sqlite` 不可用 | 启动时检查版本并给出明确错误 |
 | Pi 升级导致事件契约变化 | 探针失效 | 记录所适配的 Pi 版本；升级后跑一遍 M1 验收 |
