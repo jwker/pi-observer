@@ -86,19 +86,19 @@
 
         <div class="label" style="margin:14px 0 6px">stdout</div>
         <div class="pre"><span class="hl-dim">$ pnpm run dev</span>
-&gt; pi-web@0.1.0 dev
+&gt; notes-app@0.1.0 dev
 &gt; next dev
 
-  ▲ Next.js 15.4.1
-  - Local:   http://localhost:3000
+  ▲ Next.js 16.4.2
+  - Local:   http://127.0.0.1:4173
   - ready in 1.2s</div>
 
         <div class="label" style="margin:14px 0 6px">stderr</div>
-        <div class="pre err">Error: Module not found: Can't resolve 'refractor/all'
-  at /lib/prism-languages.ts:18:15
+        <div class="pre err">Error: Module not found: Can't resolve './lib/languages'
+  at /lib/highlight.ts:18:15
 
-  18 |   loading ??= import("refractor/all").then(
-     |                  ^^^^^^^^^^^^^^^^^^^^
+  18 |   loading ??= import("./lib/languages").then(
+     |                  ^^^^^^^^^^^^^^^^^^^^^
   19 |   () =&gt; {
   20 |     loaded = true;
   21 |   },

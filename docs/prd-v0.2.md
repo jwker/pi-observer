@@ -39,6 +39,7 @@
 | C5 | payload 存脱敏后的全文（方案 A） |
 | C6 | payload 与事件只保留 7 天，到期自动清理，不设总量上限 |
 | C7 | 代码与文档纳入 git 版本控制 |
+| C8 | 应用形态 Next.js 16（App Router / Node Runtime）；`prototype/` 是设计产物，不作为产品代码 |
 
 ---
 
@@ -334,6 +335,17 @@ Pi 的数据分散在两处，且没有统一界面：
 
 `node:sqlite`（Node 内置）。要求 Node ≥ 24；本机为 v26.5.0。开启 WAL。
 
+初始化顺序（顺序错了 `auto_vacuum` 不生效，需要补一次 `VACUUM`）：
+
+1. 打开库：`new DatabaseSync(path, { timeout: 5000 })`；
+2. 若要用增量回收，**先**设 `PRAGMA auto_vacuum = INCREMENTAL`；
+3. `PRAGMA journal_mode = WAL`；
+4. `PRAGMA synchronous = NORMAL`；
+5. 建表与索引（`schema.sql`）；
+6. 迁移：读写 `PRAGMA user_version`。
+
+连接只在服务端使用（route handler / server 组件），并挂在 `globalThis` 上避免开发态热重载重复打开；不得出现在客户端组件里。技术细节与实测见 `docs/tech-stack.md` §4、附录 B。
+
 ### 8.2 表结构
 
 **sessions**
@@ -482,7 +494,7 @@ CREATE INDEX idx_sessions_activity    ON sessions(last_activity_at DESC);
 - 服务启动时执行一次，之后每小时一次。
 - 判断依据：`llm_requests.created_at`、`events.received_at`。
 - 只做时间判断，不设总量上限（已确认）。
-- 每天执行一次 `VACUUM`，回收删除留下的空间。
+- 每天执行一次 `VACUUM`，回收删除留下的空间；**`VACUUM` 之后必须跟一次 `PRAGMA wal_checkpoint(TRUNCATE)`**，否则 WAL 占用的磁盘不释放（实测：155 MB 的库只 `VACUUM` 后主库仍是 155 MB，补 checkpoint 后才归零）。
 - 清理只删除看板库中的副本，不动 `~/.pi/agent/sessions/` 下的原始会话文件。
 
 ---
@@ -536,7 +548,7 @@ SSE 事件类型：`session.updated`、`turn.updated`、`tool.updated`、`reques
 
 ## 11. 页面
 
-页面原型见 `prototype/`（多文件 HTML，可点击跳转，作为开发参考）。文件清单与改法见 `prototype/README.md`。
+`prototype/` 是**设计产物**：它定义视觉规范（配色、字号、间距、状态色语义）、信息结构与交互约定，也是本文档页面章节的图示。它不参与产品代码——产品界面按 Next.js + React 组件重写，只沿用其中的设计约定与 token 值。文件清单见 `prototype/README.md`。
 
 ### 11.1 会话列表
 
@@ -578,10 +590,13 @@ SSE 事件类型：`session.updated`、`turn.updated`、`tool.updated`、`reques
 启动方式：
 
 ```bash
-npm run dev     # 开发
-npm run start   # 生产
-pi --extension /absolute/path/to/packages/probe
+npm run dev     # 开发：next dev -H 127.0.0.1 -p 4173
+npm run build   # 构建
+npm run start   # 生产：next start -H 127.0.0.1 -p 4173
+pi --extension /absolute/path/to/pi-observer/ext
 ```
+
+注意：Next 的 `dev` 与 `start` 默认监听 `0.0.0.0`，所以 `-H 127.0.0.1` 必须写进 `package.json` 脚本，不能只在文档里说明。端口用 `-p` 传，因为 `PORT` 环境变量对 Next 不生效（HTTP 服务器早于 `.env` 加载）。
 
 ---
 
@@ -655,6 +670,7 @@ pi --extension /absolute/path/to/packages/probe
 | Node 版本过低 | `node:sqlite` 不可用 | 启动时检查版本并给出明确错误 |
 | Pi 升级导致事件契约变化 | 探针失效 | 记录所适配的 Pi 版本；升级后跑一遍 M1 验收 |
 | 多会话并发 | 事件交错、页面混乱 | 按会话分组；默认只展示最近活跃的若干会话 |
+| Next 大版本改变默认行为 | 例如默认监听地址、构建器、TS 配置被改写 | 锁 `16.4.x`；升级前跑一遍 M1 验收；监听地址永远显式写在脚本里 |
 
 ---
 

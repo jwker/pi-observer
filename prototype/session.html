@@ -195,12 +195,12 @@
               <div class="ev depth-1 tool"><span class="time">21:04:42</span><span class="etype tool">tool_start</span><span class="body"><span style="color:var(--pink)">bash</span> <span class="faint">{ command: "pnpm run dev" }</span> <a href="tool.html">详情</a></span></div>
               <div class="ev depth-2 tool"><span class="time">21:04:48</span><span class="etype tool">tool_end</span><span class="body">6.1 s · exit 1 <span class="badge err">失败</span></span></div>
               <div class="ev depth-2"><span class="time">21:04:48</span><span class="etype tool">stderr</span><span class="body"><span class="note">解析器把 stderr 与 exit code 一并记录，可在工具详情页展开：</span></span></div>
-              <div class="pre err" style="margin-left:28px">Error: Module not found: Can't resolve 'refractor/all'
-  at /lib/prism-languages.ts:18:15
+              <div class="pre err" style="margin-left:28px">Error: Module not found: Can't resolve './lib/languages'
+  at /lib/highlight.ts:18:15
 
 Command exited with code 1</div>
               <div class="ev"><span class="time">21:04:50</span><span class="etype message">message_start</span><span class="body">assistant <span class="note">· 说明失败原因，不改动代码</span></span></div>
-              <div class="ev thinking"><span class="time">21:04:50</span><span class="etype message">thinking</span><span class="body">先确认 refractor 是否安装、装的是哪个版本、是否暴露 <code>refractor/all</code>。<span class="note">· 由 message_update 流式事件合并</span></span></div>
+              <div class="ev thinking"><span class="time">21:04:50</span><span class="etype message">thinking</span><span class="body">先确认 <code>./lib/languages</code> 是否存在，以及动态导入的路径写法是否正确。<span class="note">· 由 message_update 流式事件合并</span></span></div>
               <div class="ev"><span class="time">21:04:52</span><span class="etype turn">turn_end</span><span class="body">stopReason: stop <span class="note">· messageEntryId: msg_5a0c7731 · toolResultEntryIds: [tr_9e44]</span></span></div>
             </div>
           </div>
