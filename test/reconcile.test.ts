@@ -157,7 +157,7 @@ test("对账：读文件、补条目、记 last_reconciled_at，live 变 merged"
   const f = fixture();
   try {
     applyBatch({
-      protocol: 1,
+      protocol: 2,
       probe_version: "0.1.0",
       dropped_count: 0,
       queue_depth: 0,
@@ -206,7 +206,7 @@ test("对账：只补新增的条目（一遍跑完文件又长了一条）", ()
   const f = fixture();
   try {
     applyBatch({
-      protocol: 1,
+      protocol: 2,
       probe_version: "0.1.0",
       dropped_count: 0,
       queue_depth: 0,
@@ -244,7 +244,7 @@ test("对账：没有会话文件时如实返回 found=false，不写核对时�
   const f = fixture();
   try {
     applyBatch({
-      protocol: 1,
+      protocol: 2,
       probe_version: "0.1.0",
       dropped_count: 0,
       queue_depth: 0,
@@ -269,7 +269,7 @@ test("ingest 之后：关闭的会话标 ended，跑完与关闭的都安排对�
   try {
     applyBatch(
       {
-        protocol: 1,
+        protocol: 2,
         probe_version: "0.1.0",
         dropped_count: 0,
         queue_depth: 0,
@@ -320,7 +320,7 @@ test("状态推进：session_shutdown 把会话标成 ended，幂等且不影响
   const f = fixture();
   try {
     applyBatch({
-      protocol: 1,
+      protocol: 2,
       probe_version: "0.1.0",
       dropped_count: 0,
       queue_depth: 0,

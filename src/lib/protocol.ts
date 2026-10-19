@@ -7,10 +7,10 @@
  */
 
 /** 协议版本；探针与服务不一致时服务端拒绝整批（见 ingest.ts） */
-export const PROBE_PROTOCOL_VERSION = 1;
+export const PROBE_PROTOCOL_VERSION = 2;
 
 /** 探针在会话开始时上报自己的版本，便于在看板上判断探针是否过期 */
-export const PROBE_VERSION = "0.1.0";
+export const PROBE_VERSION = "0.2.0";
 
 export type EventLayer = "session" | "agent" | "turn" | "message" | "tool" | "provider";
 
@@ -91,6 +91,30 @@ export interface TurnRecord {
   cost: number | null;
 }
 
+/**
+ * 一次模型请求（`before_provider_request` → `after_provider_response`）。
+ * `(session_id, request_seq)` 是持久键：请求开始时写一次，响应到达时用同一序号再写一次，
+ * 服务端按 `COALESCE(excluded.x, table.x)` 合并，所以更新记录里的 `payload` / `payload_bytes` 为 null。
+ */
+export interface RequestRecord {
+  kind: "request";
+  session_id: string;
+  request_seq: number;
+  provider: string | null;
+  api: string | null;
+  model: string | null;
+  /** 已脱敏、超限已截断的 payload；响应更新时为 null */
+  payload: unknown;
+  /** 脱敏前原始 payload 的序列化字节数；响应更新时为 null */
+  payload_bytes: number | null;
+  payload_truncated: boolean | null;
+  status: number | null;
+  /** 已脱敏的响应头；请求开始时为 null */
+  response_headers: unknown;
+  correlation: "serial_assumed";
+  created_at: string;
+}
+
 /** 工具调用；`tool_call_id` 是持久键，执行中按同一行 upsert */
 export interface ToolCallRecord {
   kind: "tool_call";
@@ -113,7 +137,8 @@ export type IngestRecord =
   | EventRecord
   | ProgressRecord
   | TurnRecord
-  | ToolCallRecord;
+  | ToolCallRecord
+  | RequestRecord;
 
 /** 一批推送。`dropped_count` / `queue_depth` 是探针侧队列的自我报告（PRD §7.4） */
 export interface IngestBatch {

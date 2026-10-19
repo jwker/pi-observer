@@ -320,12 +320,18 @@ Pi 的数据分散在两处，且没有统一界面：
 
 | 变量 | 默认值 | 说明 |
 |:--|:--|:--|
-| `PI_OBSERVER_ENDPOINT` | `http://127.0.0.1:4173/api/ingest` | 推送地址 |
-| `PI_OBSERVER_TOKEN` | 读 `./data/token` | 会话令牌 |
+| `PI_OBSERVER_URL` | `http://127.0.0.1:4173` | 服务基地址（推送与健康检查） |
+| `PI_OBSERVER_TOKEN_FILE` | `<repo>/data/token` | 令牌文件；相对探针文件位置，不受 Pi 的 cwd 影响 |
 | `PI_OBSERVER_LIVE_TEXT` | `1` | 是否推送流式正文 |
-| `PI_OBSERVER_SNAPSHOT_MS` | `500` | 进度快照间隔 |
-| `PI_OBSERVER_QUEUE_RECORDS` | `2000` | 队列条数上限 |
-| `PI_OBSERVER_QUEUE_BYTES` | `67108864` | 队列字节上限 |
+| `PI_OBSERVER_PROGRESS_INTERVAL_MS` | `500` | 进度快照间隔 |
+| `PI_OBSERVER_BATCH_INTERVAL_MS` | `300` | 批量推送间隔 |
+| `PI_OBSERVER_BATCH_SIZE` | `50` | 队列达到多少条立即推送 |
+| `PI_OBSERVER_MAX_BATCH_RECORDS` | `200` | 单批最多条数 |
+| `PI_OBSERVER_MAX_BATCH_BYTES` | `1572864` | 单批最多字节（服务端上限 2 MB，留余量） |
+| `PI_OBSERVER_MAX_RECORD_BYTES` | `524288` | 单条记录上限（512 KB） |
+| `PI_OBSERVER_MAX_QUEUE_RECORDS` | `2000` | 队列条数上限 |
+| `PI_OBSERVER_MAX_QUEUE_BYTES` | `67108864` | 队列字节上限 |
+| `PI_OBSERVER_DEBUG_REQUESTS` | `0` | 每次模型请求往终端打一行采集摘要（原始长度 / 脱敏数 / 存储长度 / 是否截断），默认关闭 |
 
 ---
 
@@ -418,7 +424,7 @@ Pi 的数据分散在两处，且没有统一界面：
 | `id` | INTEGER PK | |
 | `session_id` | TEXT | |
 | `request_seq` | INTEGER | 会话内自增 |
-| `provider` / `api` / `model` | TEXT | 从 payload 提取 |
+| `provider` / `api` / `model` | TEXT | 优先取 `ctx.model`（provider / api / id），`payload.model` 兜底 |
 | `payload` | TEXT | 脱敏后的 JSON；7 天后清空为 `{"deleted":true}` |
 | `payload_bytes` | INTEGER | 原始大小 |
 | `payload_truncated` | INTEGER | 是否截断 |
@@ -428,6 +434,12 @@ Pi 的数据分散在两处，且没有统一界面：
 | `created_at` | TEXT | |
 
 约束：`UNIQUE(session_id, request_seq)`。
+
+三条落地约定（M3）：
+
+- `payload_bytes` 是**脱敏前**原始 payload 的序列化字节数；`payload` 超过 512 KB 时存合法 JSON 标记 `{"truncated":true,"bytes":N,"original_bytes":N,"head":"前 4 KB"}`，`payload_truncated` 为 1。
+- `request_seq` 由探针按会话维护，游标写在 `<repo>/data/request-seq/<会话哈希>.seq`；Pi 进程退出后用 `--resume` 打开同一会话时接着上次的序号，不会从 1 重置覆盖旧记录。
+- 请求开始时写 payload（状态码为空），`after_provider_response` 到达时用同一 `(session_id, request_seq)` 补 `status` / `response_headers`；更新记录不带 payload 字段，服务端不会用空值覆盖。按顺序关联（`correlation = serial_assumed`）。
 
 **events**（时间线）
 
@@ -727,7 +739,8 @@ pi --extension /absolute/path/to/pi-observer/ext
 
 验收：
 
-- 每次真实请求恰好 1 条记录；重试与重发会产生新记录，不覆盖旧记录。
+- 每次 `before_provider_request` 恰好 1 条记录；应用层再次发起的新请求（新 turn / 重发）会产生新序号，不覆盖旧记录。
+  Pi 内部的 HTTP 重试发生在一次 before / after 之间，探针看不到每次尝试，只记一条（状态码取最终响应）；重试次数不可得。
 - 记录中不含 `authorization` 或 API key。
 - 记录的 `payload_bytes` 与触发时打印的原始长度一致；超过上限时 `payload_truncated` 为 1。
 - 状态码与响应头可见。
@@ -750,7 +763,7 @@ pi --extension /absolute/path/to/pi-observer/ext
 |:--|:--|:--|
 | `turnIndex` 每次运行归零 | 单靠它无法做唯一键 | 已用 `runSeq` 分组、`messageEntryId` 作持久键 |
 | 探针在流式中重启 | 正在生成的消息丢失尾部 | 对账从 JSONL 补齐；界面标注 |
-| 请求与响应无共享 ID | 并发时可能错配 | 目前假设串行；出现并发时标注 `serial_assumed` 并在界面提示 |
+| 请求与响应无共享 ID | 并发时可能错配 | 目前假设串行：同一时间只保留一个待响应请求，新的 `before_provider_request` 会放弃未响应的旧请求；界面标注 `serial_assumed` |
 | JSONL 整文件重写 | 读取位置失效 | 大小变小即重读；用条目 ID 去重 |
 | 同一条目 id 出现在两个会话文件里 | `turns`（`message_entry_id`）与 `tool_calls`（`tool_call_id`）的持久键是全局唯一，回填后到的那份会写到先到的那一行 | 实测 Pi 的 `newSession`（fork / clone，`parentSession` 记录血缘）只写一个新的 `session` 头部、不复制条目 id（`session-manager.js` 已核），所以正常路径不会发生；手工复制会话文件属于已知边界 |
 | payload 体积与敏感内容 | 存储膨胀、泄露风险 | 脱敏 + 单条 512 KB 截断 + 7 天到期清空；不设总量上限，磁盘占用按周衡量 |

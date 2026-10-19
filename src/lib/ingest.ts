@@ -9,12 +9,12 @@ import {
   type IngestRecord,
   type IngestResponse,
 } from "./protocol.ts";
-import { serializeCapped } from "./redact.ts";
+import { redact, serializeCapped } from "./redact.ts";
 import { broadcast } from "./sse.ts";
 
 export type ParseResult = { ok: true; batch: IngestBatch } | { ok: false; error: string };
 
-const KINDS = new Set(["session", "run", "event", "progress", "turn", "tool_call"]);
+const KINDS = new Set(["session", "run", "event", "progress", "turn", "tool_call", "request"]);
 const EVENT_LAYERS = new Set<EventLayer>(["session", "agent", "turn", "message", "tool", "provider"]);
 const MAX_RECORDS_PER_BATCH = 1000;
 
@@ -47,6 +47,13 @@ function intOrNull(value: unknown): number | null {
 
 function boolInt(value: unknown): number {
   return value === true || value === 1 || value === "1" ? 1 : 0;
+}
+
+/** 三态布尔：null / 缺失保留为 null，供 upsert 的 COALESCE 判断「本次没带这个值」 */
+function boolOrNull(value: unknown): boolean | null {
+  if (value === true || value === 1 || value === "1") return true;
+  if (value === false || value === 0 || value === "0") return false;
+  return null;
 }
 
 /**
@@ -189,6 +196,28 @@ export function parseBatch(raw: unknown): ParseResult {
         });
         break;
       }
+      case "request": {
+        const requestSeq = intOrNull(item.request_seq);
+        if (requestSeq === null) errors.push(`records[${at}].request_seq 缺失`);
+        if (requestSeq !== null && requestSeq < 1) errors.push(`records[${at}].request_seq 必须大于 0`);
+        checked.push({
+          kind: "request",
+          session_id: req(item.session_id, "session_id", errors, at),
+          request_seq: requestSeq ?? 0,
+          provider: str(item.provider),
+          api: str(item.api),
+          model: str(item.model),
+          payload: item.payload ?? null,
+          payload_bytes: intOrNull(item.payload_bytes),
+          payload_truncated: boolOrNull(item.payload_truncated),
+          status: intOrNull(item.status),
+          response_headers: item.response_headers ?? null,
+          // 目前只有一种关联方式；显式写出来，避免以后忘记这里是假设
+          correlation: "serial_assumed",
+          created_at: req(item.created_at, "created_at", errors, at),
+        });
+        break;
+      }
     }
   });
 
@@ -224,6 +253,14 @@ export function applyBatch(batch: IngestBatch, db: Db): IngestResponse {
    */
   const jsonOrNull = (value: unknown): string | null =>
     value === null || value === undefined ? null : serializeCapped(value, maxPayload).json;
+
+  /**
+   * 请求 payload / 响应头在服务端再脱敏一次（防御纵深）：探针已经脱过，但服务端不能假设
+   * 每个客户端都做对了——否则一个旧探针或手工请求就能把 authorization 原样写进库。
+   * `payload_bytes` 仍是探针给的脱敏前原始长度，不受这里影响。
+   */
+  const redactedJsonOrNull = (value: unknown): string | null =>
+    value === null || value === undefined ? null : serializeCapped(redact(value).value, maxPayload).json;
 
   const bump = (kind: string) => {
     applied[kind] = (applied[kind] ?? 0) + 1;
@@ -294,6 +331,25 @@ export function applyBatch(batch: IngestBatch, db: Db): IngestResponse {
         duration_ms = COALESCE(excluded.duration_ms, tool_calls.duration_ms),
         started_at = COALESCE(tool_calls.started_at, excluded.started_at),
         ended_at = COALESCE(excluded.ended_at, tool_calls.ended_at)
+    `);
+
+    // 请求开始时写 payload，响应到达时用同一 (session_id, request_seq) 补状态码与 headers。
+    // 更新记录里 payload / payload_bytes / payload_truncated 为 null：payload 用 COALESCE 保留，
+    // 字节数与截断标记用 MAX 保留（两列 NOT NULL DEFAULT 0，传 0 不会冲掉请求时的值）。
+    const upsertRequest = db.prepare(`
+      INSERT INTO llm_requests (
+        session_id, request_seq, provider, api, model, payload, payload_bytes,
+        payload_truncated, status, response_headers, correlation, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(session_id, request_seq) DO UPDATE SET
+        provider = COALESCE(excluded.provider, llm_requests.provider),
+        api = COALESCE(excluded.api, llm_requests.api),
+        model = COALESCE(excluded.model, llm_requests.model),
+        payload = COALESCE(excluded.payload, llm_requests.payload),
+        payload_bytes = MAX(llm_requests.payload_bytes, excluded.payload_bytes),
+        payload_truncated = MAX(llm_requests.payload_truncated, excluded.payload_truncated),
+        status = COALESCE(excluded.status, llm_requests.status),
+        response_headers = COALESCE(excluded.response_headers, llm_requests.response_headers)
     `);
 
     // 普通事件幂等忽略；进度快照按确定性 event_id 覆盖同一行（PRD §7.3）
@@ -390,6 +446,25 @@ export function applyBatch(batch: IngestBatch, db: Db): IngestResponse {
           );
           touched.add(record.session_id);
           bump("event");
+          break;
+        }
+        case "request": {
+          upsertRequest.run(
+            record.session_id,
+            record.request_seq,
+            record.provider,
+            record.api,
+            record.model,
+            redactedJsonOrNull(record.payload),
+            record.payload_bytes ?? 0,
+            record.payload_truncated === null ? 0 : record.payload_truncated ? 1 : 0,
+            record.status,
+            redactedJsonOrNull(record.response_headers),
+            record.correlation,
+            record.created_at,
+          );
+          touched.add(record.session_id);
+          bump("request");
           break;
         }
         case "progress": {

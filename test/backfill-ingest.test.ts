@@ -382,7 +382,7 @@ test("backfillFile：实时先写过 turn 时，回填落同一行且不动 run_
     // 先按实时路径写同一批：会话 + 助手 turn（同一个 message_entry_id）
     applyBatch(
       {
-        protocol: 1,
+        protocol: 2,
         probe_version: "0.1.0",
         dropped_count: 0,
         queue_depth: 0,

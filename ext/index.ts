@@ -9,7 +9,7 @@
  * `session_start` 里建；`session_shutdown` 幂等收尾。
  *
  * 事件清单与订阅取舍见 PRD §5.2；`before_provider_request` / `after_provider_response`
- * 属 M3，本文件暂不订阅。
+ * 从 M3 起订阅，payload 先脱敏、再按单条上限截断。
  */
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -29,6 +29,8 @@ import { createFlusher, type Flusher } from "./flush.ts";
 import { capText, capValue } from "./limit.ts";
 import { MergeTable, assistantLike, extractParts } from "./merge.ts";
 import { BoundedQueue } from "./queue.ts";
+import { RequestTracker } from "./request.ts";
+import { requestSeqStore } from "./seq-store.ts";
 
 interface SessionInfo {
   sessionId: string;
@@ -44,6 +46,8 @@ interface ProbeState {
   queue: BoundedQueue<IngestRecord>;
   flusher: Flusher;
   merge: MergeTable;
+  /** 请求序号 + 请求/响应对应；每个会话一个 */
+  requests: RequestTracker;
   token: string | null;
   runSeq: number;
   runStartedAt: string | null;
@@ -66,6 +70,13 @@ function jsonSize(value: unknown): number {
   } catch {
     return 1024;
   }
+}
+
+/** payload 里的 model 字段（不同 API 都可能带；拿不到就返回 null） */
+function payloadModel(payload: unknown): string | null {
+  if (typeof payload !== "object" || payload === null) return null;
+  const value = (payload as { model?: unknown }).model;
+  return typeof value === "string" && value !== "" ? value : null;
 }
 
 /** 每个 handler 的外壳：异常只写本地日志，绝不向 Pi 抛出（PRD §7.2） */
@@ -262,6 +273,27 @@ export default function probe(pi: ExtensionAPI): void {
           log: (message) => console.error(`[pi-observer] ${message}`),
         }),
         merge: new MergeTable(),
+        requests: (() => {
+          const seqStore = requestSeqStore(config.tokenFile, session.sessionId);
+          let warned = false;
+          return new RequestTracker({
+            sessionId: session.sessionId,
+            maxBytes: config.maxRecordBytes,
+            initialSeq: seqStore.load(),
+            persistSeq: (seq) => {
+              try {
+                seqStore.save(seq);
+              } catch (error) {
+                // 只提醒一次：写不了游标时序号仍可用，但重开同一会话可能撞号
+                if (!warned) {
+                  warned = true;
+                  console.error(`[pi-observer] 请求序号游标写入失败（${(error as Error).message}）；续跑同一会话时可能覆盖旧请求`);
+                }
+              }
+            },
+            log: config.debugRequests ? (message) => console.error(`[pi-observer] ${message}`) : undefined,
+          });
+        })(),
         token: null,
         runSeq: 0,
         runStartedAt: null,
@@ -548,6 +580,48 @@ export default function probe(pi: ExtensionAPI): void {
         duration_ms: typeof event.durationMs === "number" ? event.durationMs : null,
         started_at: partial?.startedAt ?? null,
         ended_at: endedAt,
+      });
+    }),
+  );
+
+  // ── 模型请求（M3）───────────────────────────────────────────────────────
+  pi.on("before_provider_request", (event, ctx) =>
+    safe("before_provider_request", () => {
+      const s = state;
+      if (!s?.session) return;
+      const model = ctx.model;
+      const record = s.requests.start(event.payload, {
+        provider: model?.provider ?? null,
+        api: model?.api ?? null,
+        model: model?.id ?? payloadModel(event.payload),
+      });
+      emit(s, record);
+      pushEvent(s, "provider", "provider_request", {
+        requestSeq: record.request_seq,
+        provider: record.provider,
+        api: record.api,
+        model: record.model,
+        payloadBytes: record.payload_bytes,
+        payloadTruncated: record.payload_truncated,
+      });
+    }),
+  );
+
+  pi.on("after_provider_response", (event) =>
+    safe("after_provider_response", () => {
+      const s = state;
+      if (!s?.session) return;
+      const record = s.requests.response(event.status, event.headers);
+      if (!record) {
+        // 没有配对的请求：不凭空造一条没有 payload 的记录，只如实记一条事件
+        pushEvent(s, "provider", "provider_response_unmatched", { status: event.status });
+        return;
+      }
+      emit(s, record);
+      pushEvent(s, "provider", "provider_response", {
+        requestSeq: record.request_seq,
+        status: record.status,
+        headerNames: Object.keys(event.headers ?? {}).sort(),
       });
     }),
   );

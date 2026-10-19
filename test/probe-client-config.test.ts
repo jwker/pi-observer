@@ -117,6 +117,7 @@ test("探针配置：默认地址、批量与队列上限、实时正文默认�
   assert.equal(config.maxQueueBytes, 64 * 1024 * 1024);
   assert.equal(config.maxRecordBytes, 512 * 1024);
   assert.equal(config.liveText, true);
+  assert.equal(config.debugRequests, false);
   assert.ok(config.tokenFile === defaultTokenFile());
   assert.ok(config.tokenFile.endsWith("/data/token"));
 });
@@ -128,6 +129,7 @@ test("探针配置：环境变量可覆盖地址、开关与上限", () => {
     PI_OBSERVER_BATCH_SIZE: "10",
     PI_OBSERVER_TOKEN_FILE: "/tmp/token",
     PI_OBSERVER_MAX_QUEUE_RECORDS: "5",
+    PI_OBSERVER_DEBUG_REQUESTS: "1",
   });
   assert.equal(config.baseUrl, "http://127.0.0.1:9999");
   assert.equal(config.ingestUrl, "http://127.0.0.1:9999/api/ingest");
@@ -135,6 +137,7 @@ test("探针配置：环境变量可覆盖地址、开关与上限", () => {
   assert.equal(config.batchSize, 10);
   assert.equal(config.tokenFile, "/tmp/token");
   assert.equal(config.maxQueueRecords, 5);
+  assert.equal(config.debugRequests, true);
 });
 
 test("单条上限：超限给合法标记，capText 不切断多字节字符", () => {

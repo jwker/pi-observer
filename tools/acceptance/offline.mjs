@@ -117,7 +117,7 @@ const turnRecord = (marker) => ({
 });
 
 const envelope = (records) => ({
-  protocol: 1,
+  protocol: 2,
   probe_version: "accept-offline",
   dropped_count: 0,
   queue_depth: 0,
@@ -214,7 +214,7 @@ try {
   await checks.check("A1", "健康检查", async () => {
     assertEqual(health.ok, true, "ok");
     assertEqual(health.service, "pi-observer", "service");
-    assertEqual(health.protocol, 1, "protocol");
+    assertEqual(health.protocol, 2, "protocol");
     assert(health.schema_user_version >= 1, `schema_user_version 应为 ≥1，实际 ${health.schema_user_version}`);
     assert("probe" in health, "健康检查应有 probe 字段");
     assertEqual(health.probe, null, "还没收到任何批次时 probe 应为 null（如实标注，不编造）");
@@ -708,7 +708,7 @@ try {
       );
 
       const posted = await postBatch(bfBase, bfToken, {
-        protocol: 1,
+        protocol: 2,
         probe_version: "0.1.0",
         dropped_count: 0,
         queue_depth: 0,
@@ -770,7 +770,7 @@ try {
 
     await checks.check("A21", "session_shutdown：会话推进到已结束，概览里出现核对时间", async () => {
       const posted = await postBatch(bfBase, bfToken, {
-        protocol: 1,
+        protocol: 2,
         probe_version: "0.1.0",
         dropped_count: 0,
         queue_depth: 0,
@@ -842,6 +842,119 @@ try {
       }
 
       return `3 行文件 → 识别为重写、重读 2 条；${beforeCount} 条条目 / ${beforeDistinct} 个 id 不变，无重复（已不在文件里的条目保留，见 PRD §9.2）`;
+    });
+
+    // ── 档 A 续：M3-1 模型请求采集 ───────────────────────────────────────
+    await checks.check("A23", "模型请求：payload 脱敏、原始字节数、响应状态与 headers 落库", async () => {
+      const payload = {
+        model: "accept-model",
+        messages: [{ role: "user", content: "请求正文标记-ACCEPT-REQUEST" }],
+        authorization: "Bearer sk-acceptacceptaccept",
+        headers: { "x-api-key": "accept-key" },
+      };
+      const payloadBytes = Buffer.byteLength(JSON.stringify(payload), "utf8");
+      const baseRecord = {
+        kind: "request",
+        session_id: BF_SID,
+        request_seq: 1,
+        correlation: "serial_assumed",
+        created_at: nowIso(),
+      };
+
+      const started = await postBatch(bfBase, bfToken, {
+        protocol: 2,
+        probe_version: "0.2.0",
+        dropped_count: 0,
+        queue_depth: 0,
+        records: [
+          {
+            ...baseRecord,
+            provider: "accept-provider",
+            api: "accept-api",
+            model: "accept-model",
+            payload,
+            payload_bytes: payloadBytes,
+            payload_truncated: false,
+            status: null,
+            response_headers: null,
+          },
+          {
+            kind: "event",
+            event_id: "accept-provider-request-1",
+            session_id: BF_SID,
+            layer: "provider",
+            event_type: "provider_request",
+            payload: { requestSeq: 1, payloadBytes },
+            occurred_at: nowIso(),
+            run_seq: 1,
+            turn_index: 0,
+          },
+        ],
+      });
+      assertEqual(started.status, 200, "请求开始记录的状态码");
+
+      const answered = await postBatch(bfBase, bfToken, {
+        protocol: 2,
+        probe_version: "0.2.0",
+        dropped_count: 0,
+        queue_depth: 0,
+        records: [
+          {
+            ...baseRecord,
+            provider: null,
+            api: null,
+            model: null,
+            payload: null,
+            payload_bytes: null,
+            payload_truncated: null,
+            status: 200,
+            response_headers: { authorization: "secret-value", "x-ds-trace-id": "trace-accept" },
+          },
+          {
+            kind: "event",
+            event_id: "accept-provider-response-1",
+            session_id: BF_SID,
+            layer: "provider",
+            event_type: "provider_response",
+            payload: { requestSeq: 1, status: 200 },
+            occurred_at: nowIso(),
+            run_seq: 1,
+            turn_index: 0,
+          },
+        ],
+      });
+      assertEqual(answered.status, 200, "响应更新记录的状态码");
+
+      const db = await openTempDb(bfDataDir);
+      try {
+        const rows = db
+          .prepare("SELECT * FROM llm_requests WHERE session_id = ? AND request_seq = 1")
+          .all(BF_SID);
+        assertEqual(rows.length, 1, "同一 (session_id, request_seq) 只有一行");
+        const row = rows[0];
+        const stored = JSON.parse(row.payload);
+        assertEqual(stored.authorization, "[redacted]", "authorization 被脱敏");
+        assertEqual(stored.headers["x-api-key"], "[redacted]", "x-api-key 被脱敏");
+        assertIncludes(stored.messages[0].content, "ACCEPT-REQUEST", "正文照常保留");
+        assertEqual(row.payload_bytes, payloadBytes, "payload_bytes 是脱敏前的原始字节数");
+        assertEqual(row.payload_truncated, 0, "未超限不打截断标");
+        assertEqual(row.status, 200, "响应状态码");
+        assertEqual(row.model, "accept-model", "模型来自请求记录");
+        assertEqual(row.correlation, "serial_assumed", "关联方式");
+        const headers = JSON.parse(row.response_headers);
+        assertEqual(headers.authorization, "[redacted]", "响应头里的凭据也被脱敏");
+        assertEqual(headers["x-ds-trace-id"], "trace-accept", "普通响应头保留");
+
+        const events = db
+          .prepare("SELECT event_type FROM events WHERE session_id = ? AND event_type LIKE 'provider_%' ORDER BY id")
+          .all(BF_SID)
+          .map((item) => item.event_type);
+        assertEqual(events.join(","), "provider_request,provider_response", "时间线上有请求与响应两条事件");
+      } finally {
+        db.close();
+      }
+
+      return `1 条请求：payload_bytes ${payloadBytes} 与原始长度一致；authorization / x-api-key / 响应头凭据都已脱敏；status 200；时间线 2 条事件`;
     });
   } finally {
     await bfServer.stop();

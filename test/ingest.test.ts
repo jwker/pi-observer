@@ -235,6 +235,82 @@ test("applyBatch：turn 与 tool_call 按持久键 upsert，后到的字段补�
   }
 });
 
+test("applyBatch：请求开始时写 payload，响应到达后补状态码与 headers", () => {
+  const { db, cleanup } = tempDb();
+  try {
+    const start: IngestBatch = {
+      protocol: PROBE_PROTOCOL_VERSION,
+      probe_version: "0.2.0",
+      dropped_count: 0,
+      queue_depth: 0,
+      records: [
+        {
+          kind: "request",
+          session_id: "s1",
+          request_seq: 1,
+          provider: "deepseek",
+          api: "openai-completions",
+          model: "deepseek-flash",
+          payload: { model: "deepseek-flash", authorization: "Bearer sk-ingestsecret0123456789" },
+          payload_bytes: 1234,
+          payload_truncated: false,
+          status: null,
+          response_headers: null,
+          correlation: "serial_assumed",
+          created_at: OCCURRED,
+        },
+      ],
+    };
+    applyBatch(start, db);
+
+    const select = () =>
+      db.prepare("SELECT * FROM llm_requests WHERE session_id = 's1' AND request_seq = 1").get() as Record<string, unknown>;
+    let row = select();
+    assert.equal(row.payload_bytes, 1234);
+    assert.equal(row.status, null);
+    assert.equal(row.model, "deepseek-flash");
+    assert.equal(JSON.parse(row.payload as string).model, "deepseek-flash");
+    assert.equal(JSON.parse(row.payload as string).authorization, "[redacted]", "服务端也会再脱敏一次");
+
+    const response: IngestBatch = {
+      protocol: PROBE_PROTOCOL_VERSION,
+      probe_version: "0.2.0",
+      dropped_count: 0,
+      queue_depth: 0,
+      records: [
+        {
+          kind: "request",
+          session_id: "s1",
+          request_seq: 1,
+          provider: null,
+          api: null,
+          model: null,
+          payload: null,
+          payload_bytes: null,
+          payload_truncated: null,
+          status: 200,
+          response_headers: { "content-type": "application/json", authorization: "secret-value" },
+          correlation: "serial_assumed",
+          created_at: "2026-10-19T10:00:02.000Z",
+        },
+      ],
+    };
+    applyBatch(response, db);
+
+    row = select();
+    assert.equal(row.status, 200);
+    assert.equal(row.payload_bytes, 1234, "响应更新不能把原始字节数冲掉");
+    assert.equal(row.payload_truncated, 0);
+    assert.equal(row.created_at, OCCURRED, "created_at 保留请求开始时间");
+    assert.equal(JSON.parse(row.response_headers as string)["content-type"], "application/json");
+    assert.equal(JSON.parse(row.response_headers as string).authorization, "[redacted]", "响应头也脱敏");
+    assert.equal(count(db, "llm_requests"), 1, "同一 (session_id, request_seq) 只有一行");
+  } finally {
+    db.close();
+    cleanup();
+  }
+});
+
 test("applyBatch：进度快照按确定性 event_id 覆盖同一行", () => {
   const { db, cleanup } = tempDb();
   try {

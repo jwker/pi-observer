@@ -38,7 +38,7 @@ curl -s $BASE/api/health; echo
 send () {
   curl -s -o /dev/null -w "POST $1 → HTTP %{http_code}\n" -X POST \
     -H "content-type: application/json" -H "x-observer-token: $TOKEN" \
-    -d "{\"protocol\":1,\"probe_version\":\"0.1.0\",\"dropped_count\":0,\"queue_depth\":0,\"records\":[{\"kind\":\"event\",\"event_id\":\"$1\",\"session_id\":\"hmr-test\",\"layer\":\"turn\",\"event_type\":\"turn_start\",\"payload\":{\"n\":1},\"occurred_at\":null,\"run_seq\":1,\"turn_index\":0}]}" \
+    -d "{\"protocol\":2,\"probe_version\":\"0.1.0\",\"dropped_count\":0,\"queue_depth\":0,\"records\":[{\"kind\":\"event\",\"event_id\":\"$1\",\"session_id\":\"hmr-test\",\"layer\":\"turn\",\"event_type\":\"turn_start\",\"payload\":{\"n\":1},\"occurred_at\":null,\"run_seq\":1,\"turn_index\":0}]}" \
     $BASE/api/ingest
 }
 

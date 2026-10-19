@@ -29,6 +29,8 @@ export interface ProbeConfig {
   maxRecordBytes: number;
   /** 实时正文开关（C2 默认开） */
   liveText: boolean;
+  /** 每次模型请求往终端打一行采集摘要（长度 / 脱敏数 / 是否截断），默认关闭 */
+  debugRequests: boolean;
 }
 
 function intFromEnv(raw: string | undefined, fallback: number): number {
@@ -66,5 +68,6 @@ export function loadProbeConfig(env: Record<string, string | undefined> = proces
     maxQueueBytes: intFromEnv(env.PI_OBSERVER_MAX_QUEUE_BYTES, 64 * 1024 * 1024),
     maxRecordBytes: intFromEnv(env.PI_OBSERVER_MAX_RECORD_BYTES, 512 * 1024),
     liveText: boolFromEnv(env.PI_OBSERVER_LIVE_TEXT, true),
+    debugRequests: boolFromEnv(env.PI_OBSERVER_DEBUG_REQUESTS, false),
   };
 }
