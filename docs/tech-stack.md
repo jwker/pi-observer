@@ -274,6 +274,10 @@ SSE 实现要点（已实测，附录 C.3）：
 | 前提 | 被测模块放在 `src/lib/**`，且相对导入带 `.ts` 后缀（§3.2） |
 | 优先覆盖 | JSONL 5 条解析规则、幂等 upsert（同一 payload 写两次只有一行）、脱敏黑名单、7 天清理、SSE 帧格式、探针队列溢出与 `dropped_count` |
 | 类型检查 | `next typegen && tsc --noEmit`（框架自带，不额外引工具） |
+| 覆盖率 | `npm run coverage`（`node --test --experimental-test-coverage`，内置，不引依赖）。只统计被测试 import 的模块，`src/app/**` 与 `src/components/**` 不计入 |
+| 一次跑完 | `npm run check` = 单测 + 类型检查 + 构建 |
+| 端到端 | `npm run accept`：档 A 离线验收，13 项断言，跑在临时数据目录与空闲端口上，无副作用。`npm run verify` = `check` + `accept` |
+| 真实 Pi | `tools/acceptance/real-pi/`：卡顿 A/B、强杀恢复、HMR、端到端延迟。会花 token 或杀端口，详见该目录 README |
 | 不引 | vitest / jest。若将来真要为 React 组件写断言，再加 vitest，到那时再说 |
 
 ---
@@ -381,6 +385,8 @@ SSE 实现要点（已实测，附录 C.3）：
 | 6 | 大请求体 | 5 MB JSON 被 route handler 正常接收 | 通过 |
 
 若某天发现 Node 或 Next 升级后这些行为变了，先改这里，再改代码。
+
+这 6 项现在大部分可以重跑：第 1、2、3、5 项与「请求体上限」由 `npm run accept` 覆盖（第 3 项另见 `tools/acceptance/real-pi/` 的 SSE 探针），第 4 项由 `tools/acceptance/real-pi/hmr.sh` 覆盖。注意第 6 项当初验证的是「框架没有默认请求体上限」，本仓库的产品上限是 2 MB → 413，`npm run accept` 的 A5 断言的是后者。
 
 ---
 

@@ -12,7 +12,11 @@
     "build": "next build",
     "start": "next start -H 127.0.0.1 -p 4173",
     "typecheck": "next typegen && tsc --noEmit",
-    "test": "node --test test/*.test.ts"
+    "test": "node --test test/*.test.ts",
+    "coverage": "node --test --experimental-test-coverage test/*.test.ts",
+    "check": "npm test && npm run typecheck && npm run build",
+    "accept": "node tools/acceptance/offline.mjs",
+    "verify": "npm run check && npm run accept"
   },
   "dependencies": {
     "next": "16.4.2",
