@@ -859,6 +859,8 @@ try {
         request_seq: 1,
         correlation: "serial_assumed",
         created_at: nowIso(),
+        run_seq: 9,
+        turn_index: 1,
       };
 
       const started = await postBatch(bfBase, bfToken, {
@@ -955,6 +957,94 @@ try {
       }
 
       return `1 条请求：payload_bytes ${payloadBytes} 与原始长度一致；authorization / x-api-key / 响应头凭据都已脱敏；status 200；时间线 2 条事件`;
+    });
+
+    // ── 档 A 续：M3-3 请求列表与详情 ─────────────────────────────────────
+    await checks.check("A24", "请求列表与详情：token / 成本按 run_seq + turn_index 关联，payload 和 headers 按需取", async () => {
+      const postedTurn = await postBatch(bfBase, bfToken, {
+        protocol: 2,
+        probe_version: "0.2.0",
+        dropped_count: 0,
+        queue_depth: 0,
+        records: [
+          {
+            kind: "turn",
+            session_id: BF_SID,
+            run_seq: 9,
+            turn_index: 1,
+            message_entry_id: "accept-request-turn-1",
+            started_at: "2026-10-19T08:10:00.000Z",
+            ended_at: "2026-10-19T08:10:01.000Z",
+            stop_reason: "stop",
+            thinking_level: "off",
+            assistant_message: {
+              role: "assistant",
+              content: [{ type: "text", text: "请求对应 Turn 的助手消息" }],
+              usage: { input: 111, output: 222, cacheRead: 33, cacheWrite: 44, cost: { total: 0.043 } },
+            },
+            tool_results: [],
+            tokens_in: 111,
+            tokens_out: 222,
+            cost: 0.043,
+          },
+        ],
+      });
+      assertEqual(postedTurn.status, 200, "写入关联 Turn 的状态码");
+
+      const list = await getJson(`${bfBase}/api/sessions/${BF_SID}/requests`);
+      assertEqual(list.status, 200, "请求列表接口状态码");
+      assertEqual(list.json.total, 1, "请求总数");
+      assertEqual(list.json.count, 1, "请求列表行数");
+      const row = list.json.requests[0];
+      assertEqual(row.request_seq, 1, "请求序号");
+      assertEqual(row.run_seq, 9, "列表行带 run_seq");
+      assertEqual(row.turn_index, 1, "列表行带 turn_index");
+      assertEqual(row.tokens_in, 111, "输入 token 来自关联 Turn");
+      assertEqual(row.tokens_out, 222, "输出 token 来自关联 Turn");
+      assertEqual(row.cost, 0.043, "成本来自关联 Turn");
+      assert(row.payload === undefined, "列表行不带 payload");
+      assert(row.response_headers === undefined, "列表行不带响应头");
+
+      const detail = await getJson(`${bfBase}/api/sessions/${BF_SID}/requests?seq=1`);
+      assertEqual(detail.status, 200, "请求详情接口状态码");
+      const request = detail.json.request;
+      assertEqual(request.payload.authorization, "[redacted]", "详情里的 payload 已脱敏");
+      assertIncludes(request.payload.messages[0].content, "ACCEPT-REQUEST", "详情保留正文");
+      assertEqual(request.response_headers["x-ds-trace-id"], "trace-accept", "详情带响应头");
+      assertEqual(request.response_headers.authorization, "[redacted]", "响应头凭据已脱敏");
+      assertEqual(request.correlation, "serial_assumed", "关联方式");
+      assertEqual(request.turn_usage.cacheRead, 33, "usage 来自关联 Turn 的助手消息");
+      assertEqual(request.turn_usage.cacheWrite, 44, "缓存写入");
+      assertEqual(request.turn_usage.cost.total, 0.043, "usage 里的成本明细");
+
+      const cursor = await getJson(`${bfBase}/api/sessions/${BF_SID}/cursor`);
+      assertEqual(cursor.status, 200, "会话游标接口状态码");
+      assertEqual(cursor.json.request_seq_max, 1, "库里已用的最大请求序号");
+      assertEqual(cursor.json.run_seq_max, 9, "库里已用的最大运行序号");
+
+      const missing = await fetch(`${bfBase}/api/sessions/${BF_SID}/requests?seq=999`);
+      assertEqual(missing.status, 404, "不存在的请求 404");
+      const badSeq = await fetch(`${bfBase}/api/sessions/${BF_SID}/requests?seq=abc`);
+      assertEqual(badSeq.status, 400, "非法 seq 400");
+
+      const sessionPage = await fetch(`${bfBase}/sessions/${BF_SID}`);
+      const sessionHtml = await sessionPage.text();
+      assertEqual(sessionPage.status, 200, "会话详情页状态码");
+      assertIncludes(sessionHtml, "时间线", "标签条里有时间线");
+      assertIncludes(sessionHtml, "请求", "标签条里有请求");
+      assertIncludes(sessionHtml, "accept-model", "请求行显示模型");
+      assertIncludes(sessionHtml, `/sessions/${BF_SID}/requests/1`, "请求行链到详情页");
+
+      const requestPage = await fetch(`${bfBase}/sessions/${BF_SID}/requests/1`);
+      const requestHtml = await requestPage.text();
+      assertEqual(requestPage.status, 200, "请求详情页状态码");
+      assertIncludes(requestHtml, "Payload", "详情页有 payload 标签");
+      assertIncludes(requestHtml, "ACCEPT-REQUEST", "首屏就带 payload 预览");
+      assertIncludes(requestHtml, "[redacted]", "首屏显示的是脱敏后的值");
+      assertIncludes(requestHtml, "111", "首屏有输入 token");
+      assertIncludes(requestHtml, "0.04", "首屏有成本");
+
+      return `列表 1 行：token 111 / 222、成本 0.043 来自关联 Turn；详情有脱敏 payload 与响应头；页面与接口 200，缺请求 404、非法 seq 400`;
     });
   } finally {
     await bfServer.stop();

@@ -60,11 +60,53 @@ export interface ToolCallRow {
   ended_at: string | null;
 }
 
+/**
+ * 请求列表的一行（PRD §11.2 视图二）：不带 payload / headers，正文点开详情再取。
+ * token 与成本来自同一 `(session_id, run_seq, turn_index)` 的 turn，没有关联 Turn 时为 null。
+ */
+export interface RequestIndexRow {
+  id: number;
+  session_id: string;
+  request_seq: number;
+  provider: string | null;
+  api: string | null;
+  model: string | null;
+  payload_bytes: number;
+  payload_truncated: number;
+  status: number | null;
+  created_at: string;
+  run_seq: number | null;
+  turn_index: number | null;
+  /** `response_headers` 的字节数，用于列表上判断有没有拿到响应头 */
+  response_headers_bytes: number;
+  tokens_in: number | null;
+  tokens_out: number | null;
+  cost: number | null;
+}
+
+/** 请求详情：payload 与响应头已脱敏，解析成对象；usage 来自关联 Turn 的助手消息 */
+export interface RequestDetail extends RequestIndexRow {
+  correlation: string;
+  payload: unknown;
+  response_headers: unknown;
+  turn_started_at: string | null;
+  turn_ended_at: string | null;
+  turn_stop_reason: string | null;
+  /** 助手消息里的 `usage`（含 cacheRead / cacheWrite 与 cost 明细）；没有关联 Turn 时为 null */
+  turn_usage: unknown;
+}
+
 export interface ProbeStatusRow {
   last_seen_at: string | null;
   dropped_count: number;
   queue_depth: number;
   probe_version: string | null;
+}
+
+/** 会话已有数据的最大序号；探针在本地游标缺失时用它种子化（schema v3 / M3-3） */
+export interface SessionCursorRow {
+  request_seq_max: number;
+  run_seq_max: number;
 }
 
 /** 会话文件里的一条条目（PRD §8.2 / §9.1）。消息树从 `parent_id` 渲染 */

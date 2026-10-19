@@ -23,14 +23,14 @@ import {
   type SessionRecord,
   type TurnRecord,
 } from "../src/lib/protocol.ts";
-import { checkHealth } from "./client.ts";
+import { checkHealth, getSessionCursor } from "./client.ts";
 import { loadProbeConfig, type ProbeConfig } from "./config.ts";
 import { createFlusher, type Flusher } from "./flush.ts";
 import { capText, capValue } from "./limit.ts";
 import { MergeTable, assistantLike, extractParts } from "./merge.ts";
 import { BoundedQueue } from "./queue.ts";
 import { RequestTracker } from "./request.ts";
-import { requestSeqStore } from "./seq-store.ts";
+import { sessionCursorStore } from "./session-cursor.ts";
 
 interface SessionInfo {
   sessionId: string;
@@ -48,6 +48,8 @@ interface ProbeState {
   merge: MergeTable;
   /** 请求序号 + 请求/响应对应；每个会话一个 */
   requests: RequestTracker;
+  /** 把本轮运行序号写进会话游标（跨 Pi 进程不重置） */
+  persistRunSeq: (seq: number) => void;
   token: string | null;
   runSeq: number;
   runStartedAt: string | null;
@@ -88,6 +90,19 @@ function safe(label: string, fn: () => void): void {
       console.error(`[pi-observer] ${label} 处理失败：${(error as Error).message}`);
     } catch {
       // 连日志都失败就算了
+    }
+  }
+}
+
+/** 异步 handler 的外壳：同样不向 Pi 抛出 */
+async function safeAsync(label: string, fn: () => Promise<void>): Promise<void> {
+  try {
+    await fn();
+  } catch (error) {
+    try {
+      console.error(`[pi-observer] ${label} 处理失败：${(error as Error).message}`);
+    } catch {
+      // 同上
     }
   }
 }
@@ -246,7 +261,7 @@ function stopTimers(s: ProbeState): void {
 
 export default function probe(pi: ExtensionAPI): void {
   pi.on("session_start", (event, ctx) =>
-    safe("session_start", () => {
+    safeAsync("session_start", async () => {
       const session = sessionInfo(ctx);
       if (!session) {
         console.error("[pi-observer] 拿不到会话信息，本会话不采集");
@@ -257,6 +272,49 @@ export default function probe(pi: ExtensionAPI): void {
       const queue = new BoundedQueue<IngestRecord>(jsonSize, {
         maxRecords: config.maxQueueRecords,
         maxBytes: config.maxQueueBytes,
+      });
+
+      // 会话游标：request_seq 与 run_seq 都跨 Pi 进程继续。否则 --resume 后
+      // runs 的 (session_id, run_seq) 会覆盖上一轮，请求 join Turn 也会撞车。
+      const cursorStore = sessionCursorStore(config.tokenFile, session.sessionId);
+      const cursor = cursorStore.load();
+      let cursorWarned = false;
+      const persistCursor = () => {
+        try {
+          cursorStore.save(cursor);
+        } catch (error) {
+          // 只提醒一次：写不了游标时序号仍可用，但重开同一会话可能撞号
+          if (!cursorWarned) {
+            cursorWarned = true;
+            console.error(`[pi-observer] 会话游标写入失败（${(error as Error).message}）；续跑同一会话时可能覆盖旧运行/请求`);
+          }
+        }
+      };
+
+      // 第一次跑新版本 / 换了数据目录时本地游标是空的：从看板取该会话已用到的最大序号，
+      // 否则 --resume 旧会话会从 1 重来，覆盖 runs 并让请求与 Turn 关联撞车。
+      // 旧版游标只存过 request_seq（runSeq 读出来是 0），所以这里按 runSeq 判断。
+      if (cursor.runSeq === 0) {
+        const remote = await getSessionCursor({
+          url: `${config.baseUrl}/api/sessions/${encodeURIComponent(session.sessionId)}/cursor`,
+        });
+        if (remote) {
+          const before = { ...cursor };
+          cursor.requestSeq = Math.max(cursor.requestSeq, remote.requestSeq);
+          cursor.runSeq = Math.max(cursor.runSeq, remote.runSeq);
+          if (cursor.requestSeq !== before.requestSeq || cursor.runSeq !== before.runSeq) persistCursor();
+        }
+      }
+
+      const requests = new RequestTracker({
+        sessionId: session.sessionId,
+        maxBytes: config.maxRecordBytes,
+        initialSeq: cursor.requestSeq,
+        persistSeq: (seq) => {
+          cursor.requestSeq = seq;
+          persistCursor();
+        },
+        log: config.debugRequests ? (message) => console.error(`[pi-observer] ${message}`) : undefined,
       });
 
       const nextState: ProbeState = {
@@ -273,29 +331,13 @@ export default function probe(pi: ExtensionAPI): void {
           log: (message) => console.error(`[pi-observer] ${message}`),
         }),
         merge: new MergeTable(),
-        requests: (() => {
-          const seqStore = requestSeqStore(config.tokenFile, session.sessionId);
-          let warned = false;
-          return new RequestTracker({
-            sessionId: session.sessionId,
-            maxBytes: config.maxRecordBytes,
-            initialSeq: seqStore.load(),
-            persistSeq: (seq) => {
-              try {
-                seqStore.save(seq);
-              } catch (error) {
-                // 只提醒一次：写不了游标时序号仍可用，但重开同一会话可能撞号
-                if (!warned) {
-                  warned = true;
-                  console.error(`[pi-observer] 请求序号游标写入失败（${(error as Error).message}）；续跑同一会话时可能覆盖旧请求`);
-                }
-              }
-            },
-            log: config.debugRequests ? (message) => console.error(`[pi-observer] ${message}`) : undefined,
-          });
-        })(),
+        requests,
+        persistRunSeq: (seq) => {
+          cursor.runSeq = seq;
+          persistCursor();
+        },
         token: null,
-        runSeq: 0,
+        runSeq: cursor.runSeq,
         runStartedAt: null,
         turnIndex: 0,
         turnStartedAt: null,
@@ -373,6 +415,7 @@ export default function probe(pi: ExtensionAPI): void {
     safe("agent_start", () => {
       if (!state) return;
       state.runSeq += 1;
+      state.persistRunSeq(state.runSeq);
       state.runStartedAt = nowIso();
       state.turnIndex = 0;
       pushEvent(state, "agent", "agent_start", { runSeq: state.runSeq });
@@ -594,6 +637,8 @@ export default function probe(pi: ExtensionAPI): void {
         provider: model?.provider ?? null,
         api: model?.api ?? null,
         model: model?.id ?? payloadModel(event.payload),
+        runSeq: s.runStartedAt ? s.runSeq : null,
+        turnIndex: s.turnStartedAt ? s.turnIndex : null,
       });
       emit(s, record);
       pushEvent(s, "provider", "provider_request", {

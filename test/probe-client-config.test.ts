@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { BACKOFF_STEPS_MS, backoffDelay, checkHealth, postBatch } from "../ext/client.ts";
+import { BACKOFF_STEPS_MS, backoffDelay, checkHealth, getSessionCursor, postBatch } from "../ext/client.ts";
 import { loadProbeConfig, defaultTokenFile } from "../ext/config.ts";
 import { capText, capValue, jsonBytes } from "../ext/limit.ts";
 import { PROBE_PROTOCOL_VERSION, type IngestBatch } from "../src/lib/protocol.ts";
@@ -156,4 +156,24 @@ test("单条上限：超限给合法标记，capText 不切断多字节字符", 
 
   assert.equal(jsonBytes({ a: 1 }), 7);
   assert.equal(capText("短", 100), "短");
+});
+
+test("会话游标：从看板读最大序号；接口不可用或返回体不合法时返回 null", async () => {
+  const ok = await getSessionCursor({
+    url: "u",
+    fetchImpl: async () => fakeResponse(200, JSON.stringify({ ok: true, request_seq_max: 7, run_seq_max: 3 })),
+  });
+  assert.deepEqual(ok, { requestSeq: 7, runSeq: 3 });
+
+  const missing = await getSessionCursor({
+    url: "u",
+    fetchImpl: async () => fakeResponse(404, "nope"),
+  });
+  assert.equal(missing, null);
+
+  const broken = await getSessionCursor({
+    url: "u",
+    fetchImpl: async () => fakeResponse(200, "not-json"),
+  });
+  assert.equal(broken, null);
 });

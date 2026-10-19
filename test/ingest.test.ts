@@ -258,6 +258,8 @@ test("applyBatch：请求开始时写 payload，响应到达后补状态码与 h
           response_headers: null,
           correlation: "serial_assumed",
           created_at: OCCURRED,
+          run_seq: 3,
+          turn_index: 2,
         },
       ],
     };
@@ -269,6 +271,8 @@ test("applyBatch：请求开始时写 payload，响应到达后补状态码与 h
     assert.equal(row.payload_bytes, 1234);
     assert.equal(row.status, null);
     assert.equal(row.model, "deepseek-flash");
+    assert.equal(row.run_seq, 3, "运行序号落库");
+    assert.equal(row.turn_index, 2, "Turn 序号落库");
     assert.equal(JSON.parse(row.payload as string).model, "deepseek-flash");
     assert.equal(JSON.parse(row.payload as string).authorization, "[redacted]", "服务端也会再脱敏一次");
 
@@ -292,6 +296,8 @@ test("applyBatch：请求开始时写 payload，响应到达后补状态码与 h
           response_headers: { "content-type": "application/json", authorization: "secret-value" },
           correlation: "serial_assumed",
           created_at: "2026-10-19T10:00:02.000Z",
+          run_seq: null,
+          turn_index: null,
         },
       ],
     };
@@ -302,6 +308,8 @@ test("applyBatch：请求开始时写 payload，响应到达后补状态码与 h
     assert.equal(row.payload_bytes, 1234, "响应更新不能把原始字节数冲掉");
     assert.equal(row.payload_truncated, 0);
     assert.equal(row.created_at, OCCURRED, "created_at 保留请求开始时间");
+    assert.equal(row.run_seq, 3, "响应更新不能把运行序号冲掉");
+    assert.equal(row.turn_index, 2, "响应更新不能把 Turn 序号冲掉");
     assert.equal(JSON.parse(row.response_headers as string)["content-type"], "application/json");
     assert.equal(JSON.parse(row.response_headers as string).authorization, "[redacted]", "响应头也脱敏");
     assert.equal(count(db, "llm_requests"), 1, "同一 (session_id, request_seq) 只有一行");

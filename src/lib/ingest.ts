@@ -215,6 +215,8 @@ export function parseBatch(raw: unknown): ParseResult {
           // 目前只有一种关联方式；显式写出来，避免以后忘记这里是假设
           correlation: "serial_assumed",
           created_at: req(item.created_at, "created_at", errors, at),
+          run_seq: intOrNull(item.run_seq),
+          turn_index: intOrNull(item.turn_index),
         });
         break;
       }
@@ -339,8 +341,8 @@ export function applyBatch(batch: IngestBatch, db: Db): IngestResponse {
     const upsertRequest = db.prepare(`
       INSERT INTO llm_requests (
         session_id, request_seq, provider, api, model, payload, payload_bytes,
-        payload_truncated, status, response_headers, correlation, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        payload_truncated, status, response_headers, correlation, created_at, run_seq, turn_index
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(session_id, request_seq) DO UPDATE SET
         provider = COALESCE(excluded.provider, llm_requests.provider),
         api = COALESCE(excluded.api, llm_requests.api),
@@ -349,7 +351,9 @@ export function applyBatch(batch: IngestBatch, db: Db): IngestResponse {
         payload_bytes = MAX(llm_requests.payload_bytes, excluded.payload_bytes),
         payload_truncated = MAX(llm_requests.payload_truncated, excluded.payload_truncated),
         status = COALESCE(excluded.status, llm_requests.status),
-        response_headers = COALESCE(excluded.response_headers, llm_requests.response_headers)
+        response_headers = COALESCE(excluded.response_headers, llm_requests.response_headers),
+        run_seq = COALESCE(excluded.run_seq, llm_requests.run_seq),
+        turn_index = COALESCE(excluded.turn_index, llm_requests.turn_index)
     `);
 
     // 普通事件幂等忽略；进度快照按确定性 event_id 覆盖同一行（PRD §7.3）
@@ -462,6 +466,8 @@ export function applyBatch(batch: IngestBatch, db: Db): IngestResponse {
             redactedJsonOrNull(record.response_headers),
             record.correlation,
             record.created_at,
+            record.run_seq,
+            record.turn_index,
           );
           touched.add(record.session_id);
           bump("request");

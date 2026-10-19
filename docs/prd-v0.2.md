@@ -289,7 +289,7 @@ Pi 的数据分散在两处，且没有统一界面：
 高频事件不逐条转发。探针维护一张合并表：
 
 - 键：`session_id + runSeq + turnIndex`。
-  `runSeq` 在每次 `agent_start` 自增，因为 `turnIndex` 每次运行都会归零。
+  `runSeq` 在每次 `agent_start` 自增，因为 `turnIndex` 每次运行都会归零；`runSeq` 跨 Pi 进程由会话游标继续，`--resume` 后不会从 1 重来。
 - 值：最新消息快照、`updateCount`、开始时间、当前字节数。
 - `message_update`：覆盖快照、计数 +1，**只写内存**。
 - 每 500 ms：把仍在进行中的记录作为进度快照推一次。
@@ -378,7 +378,7 @@ Pi 的数据分散在两处，且没有统一界面：
 |:--|:--|:--|
 | `id` | INTEGER PK | |
 | `session_id` | TEXT | |
-| `run_seq` | INTEGER | 探针内自增 |
+| `run_seq` | INTEGER | 会话内自增；跨 Pi 进程由会话游标继续 |
 | `started_at` / `ended_at` | TEXT | |
 | `outcome` | TEXT NULL | `completed` / `aborted` / `error` |
 
@@ -431,14 +431,16 @@ Pi 的数据分散在两处，且没有统一界面：
 | `status` | INTEGER NULL | 响应状态 |
 | `response_headers` | TEXT NULL | 脱敏后的 headers |
 | `correlation` | TEXT | `serial_assumed` |
-| `created_at` | TEXT | |
+| `created_at` | TEXT | 请求开始时间 |
+| `run_seq` | INTEGER NULL | 请求发生时所在的运行（M3-3 起写入；旧行为 NULL） |
+| `turn_index` | INTEGER NULL | 请求发生时所在的 Turn（与 `run_seq` 一起关联 `turns` 取 token / 成本） |
 
 约束：`UNIQUE(session_id, request_seq)`。
 
 三条落地约定（M3）：
 
 - `payload_bytes` 是**脱敏前**原始 payload 的序列化字节数；`payload` 超过 512 KB 时存合法 JSON 标记 `{"truncated":true,"bytes":N,"original_bytes":N,"head":"前 4 KB"}`，`payload_truncated` 为 1。
-- `request_seq` 由探针按会话维护，游标写在 `<repo>/data/request-seq/<会话哈希>.seq`；Pi 进程退出后用 `--resume` 打开同一会话时接着上次的序号，不会从 1 重置覆盖旧记录。
+- `request_seq` 与 `run_seq` 由探针按会话维护，游标写在 `<repo>/data/session-cursor/<会话哈希>.json`；Pi 进程退出后用 `--resume` 打开同一会话时接着上次的序号，不会从 1 重置覆盖旧记录或旧运行。本地游标缺失时（第一次跑新版本、换了数据目录），探针从 `GET /api/sessions/:id/cursor` 取库里已用到的最大序号种子化。
 - 请求开始时写 payload（状态码为空），`after_provider_response` 到达时用同一 `(session_id, request_seq)` 补 `status` / `response_headers`；更新记录不带 payload 字段，服务端不会用空值覆盖。按顺序关联（`correlation = serial_assumed`）。
 
 **events**（时间线）
@@ -585,7 +587,7 @@ CREATE INDEX idx_jsonl_files_session ON jsonl_files(session_id);
 - **真相源是 JSONL**。实时事件用于"正在发生"的即时展示与活跃状态判断。
 - 同一会话的写入采用 upsert，键为持久 ID（`messageEntryId`、`toolCallId`），实时与回填会落到同一行。
 - 会话结束（`agent_settled`）后 3 秒触发一次对账：重新读该文件，补齐实时丢失的部分，把 `source` 置为 `merged`。
-- 探针重启造成的 `runSeq` 断裂不影响持久数据：`run_seq` 只用于展示分组，持久键仍是条目 ID。
+- `run_seq` 跨 Pi 进程由会话游标继续（M3-3 起）；它只用于展示分组，持久键仍是条目 ID。
 
 对账的落地约定（M2-5）：
 
@@ -663,7 +665,7 @@ SSE 事件类型：`session.updated`、`turn.updated`、`tool.updated`、`reques
 右侧三个视图：
 
 1. **时间线**：Session / Agent / Turn / Message / Tool 事件按时间排列，Turn 作为可折叠容器。
-2. **请求**：每次模型请求一行，展开看 payload（脱敏后）、状态码、headers、token 与成本；标注"序列化前"与"按顺序关联"。
+2. **请求**：每次模型请求一行（序号、provider / api / model、状态码、时间、输入 / 输出 token、payload 字节数、成本）；点进详情看脱敏 payload（按顶层键折叠）、响应头、usage 与关联信息；标注"序列化前"与"按顺序关联"。
 3. **工具**：按名称、Turn、是否出错筛选，展示参数、结果、耗时。
 
 实时正文：开启时，正在生成的助手消息以半透明样式逐段出现，每 500 ms 更新一次；关闭时显示"生成中…"。
@@ -744,6 +746,7 @@ pi --extension /absolute/path/to/pi-observer/ext
 - 记录中不含 `authorization` 或 API key。
 - 记录的 `payload_bytes` 与触发时打印的原始长度一致；超过上限时 `payload_truncated` 为 1。
 - 状态码与响应头可见。
+- 会话详情页能切换到请求视图；列表行显示序号、模型、状态、时间、token、payload 字节与成本；详情页显示脱敏 payload、响应头、usage（含缓存读写）与关联的 run / Turn。
 
 ### M4 打磨
 

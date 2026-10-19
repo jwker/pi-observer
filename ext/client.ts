@@ -108,3 +108,33 @@ export async function checkHealth(options: {
     return false;
   }
 }
+
+export interface RemoteCursor {
+  requestSeq: number;
+  runSeq: number;
+}
+
+/**
+ * 从看板读「这个会话已经用到的最大序号」，只在本地游标缺失时调用。
+ * 服务端不可达、接口不存在、返回体不合法都返回 null，不阻断会话启动。
+ */
+export async function getSessionCursor(options: {
+  url: string;
+  fetchImpl?: FetchLike;
+  timeoutMs?: number;
+}): Promise<RemoteCursor | null> {
+  const doFetch: FetchLike = options.fetchImpl ?? ((input, init) => fetch(input, init) as unknown as Promise<ResponseLike>);
+  try {
+    const response = await doFetch(options.url, {
+      method: "GET",
+      signal: AbortSignal.timeout(options.timeoutMs ?? 300),
+    });
+    if (response.status < 200 || response.status >= 300) return null;
+    const parsed = JSON.parse(await response.text()) as { request_seq_max?: unknown; run_seq_max?: unknown };
+    const requestSeq = typeof parsed.request_seq_max === "number" ? parsed.request_seq_max : 0;
+    const runSeq = typeof parsed.run_seq_max === "number" ? parsed.run_seq_max : 0;
+    return { requestSeq: Math.max(0, Math.trunc(requestSeq)), runSeq: Math.max(0, Math.trunc(runSeq)) };
+  } catch {
+    return null;
+  }
+}

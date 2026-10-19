@@ -6,11 +6,12 @@
  *
  * 全部语句幂等（IF NOT EXISTS），schema 变更靠 `SCHEMA_VERSION` + `PRAGMA user_version`。
  *
- * 迁移策略：**只做增量**（新增表 / 新增索引），不写 ALTER。因为 CREATE TABLE IF NOT EXISTS
- * 对已存在的表是空操作，所以「加一张表」这种变更天然幂等；要改列则必须先想清楚旧数据怎么办。
+ * 迁移策略：**只做增量**（新增表 / 索引 / 可空列）。因为 CREATE TABLE IF NOT EXISTS
+ * 对已存在的表是空操作，所以「加一张表」这种变更天然幂等；可空列用 ALTER TABLE 补，
+ * 旧行保持 NULL。要改列类型或加非空约束则必须先想清楚旧数据怎么办。
  */
 
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 export const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS sessions (
@@ -90,6 +91,8 @@ CREATE TABLE IF NOT EXISTS llm_requests (
   response_headers   TEXT,
   correlation        TEXT NOT NULL DEFAULT 'serial_assumed',
   created_at         TEXT NOT NULL,
+  run_seq            INTEGER,
+  turn_index         INTEGER,
   UNIQUE (session_id, request_seq)
 );
 

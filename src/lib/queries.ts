@@ -6,6 +6,9 @@ import type {
   MessageIndexRow,
   OverviewStats,
   ProbeStatusRow,
+  RequestDetail,
+  RequestIndexRow,
+  SessionCursorRow,
   SessionListItem,
   SessionRow,
   ToolCallRow,
@@ -18,6 +21,9 @@ export type {
   MessageIndexRow,
   OverviewStats,
   ProbeStatusRow,
+  RequestDetail,
+  RequestIndexRow,
+  SessionCursorRow,
   SessionListItem,
   SessionRow,
   ToolCallRow,
@@ -114,6 +120,21 @@ export function overviewStats(db: Db = getDb(), now: Date = new Date()): Overvie
   return plain(row);
 }
 
+/** 会话已有数据的最大序号；探针本地游标缺失时用它种子化，避免 --resume 后从 1 覆盖旧运行 / 请求 */
+export function sessionCursor(sessionId: string, db: Db = getDb()): SessionCursorRow {
+  const row = db
+    .prepare(
+      `SELECT
+         COALESCE((SELECT MAX(request_seq) FROM llm_requests WHERE session_id = ?), 0) AS request_seq_max,
+         MAX(
+           COALESCE((SELECT MAX(run_seq) FROM runs WHERE session_id = ?), 0),
+           COALESCE((SELECT MAX(run_seq) FROM turns WHERE session_id = ?), 0)
+         ) AS run_seq_max`,
+    )
+    .get(sessionId, sessionId, sessionId) as unknown as SessionCursorRow;
+  return plain(row);
+}
+
 export function getSession(sessionId: string, db: Db = getDb()): SessionRow | null {
   const row = db
     .prepare(
@@ -193,6 +214,85 @@ export function listToolCalls(sessionId: string, limit = 200, db: Db = getDb()):
     )
     .all(sessionId, limit) as unknown as ToolCallRow[];
   return rows.map(plain);
+}
+
+/**
+ * 请求列表（PRD §11.2 视图二 / M3-3）。不再从 events 里找关联：请求记录自己在
+ * `run_seq` / `turn_index` 上关联 turns，因此事件被 7 天清理后 token 与成本仍然可查。
+ * 不取 payload 与 headers：单条 payload 可到 512 KB，列表只显示字节数。
+ */
+export function listRequests(sessionId: string, limit = 200, db: Db = getDb()): RequestIndexRow[] {
+  const rows = db
+    .prepare(
+      `SELECT r.id, r.session_id, r.request_seq, r.provider, r.api, r.model,
+              r.payload_bytes, r.payload_truncated, r.status, r.created_at,
+              r.run_seq, r.turn_index,
+              COALESCE(LENGTH(r.response_headers), 0) AS response_headers_bytes,
+              t.tokens_in, t.tokens_out, t.cost
+         FROM llm_requests r
+         LEFT JOIN turns t
+           ON t.id = (
+                SELECT t2.id FROM turns t2
+                 WHERE t2.session_id = r.session_id AND t2.run_seq = r.run_seq AND t2.turn_index = r.turn_index
+                 ORDER BY t2.id DESC LIMIT 1
+              )
+        WHERE r.session_id = ?
+        ORDER BY r.request_seq DESC
+        LIMIT ?`,
+    )
+    .all(sessionId, limit) as unknown as RequestIndexRow[];
+  return rows.map(plain);
+}
+
+/** 会话的请求总数，用于如实说明列表有没有被 `limit` 截断 */
+export function countRequests(sessionId: string, db: Db = getDb()): number {
+  const row = db.prepare("SELECT COUNT(*) AS n FROM llm_requests WHERE session_id = ?").get(sessionId) as { n: number };
+  return row.n;
+}
+
+/** 单条请求详情（点击列表时进详情页，按需取 payload 与响应头） */
+export function getRequestDetail(sessionId: string, requestSeq: number, db: Db = getDb()): RequestDetail | null {
+  const row = db
+    .prepare(
+      `SELECT r.id, r.session_id, r.request_seq, r.provider, r.api, r.model,
+              r.payload_bytes, r.payload_truncated, r.status, r.created_at,
+              r.run_seq, r.turn_index, r.correlation, r.payload, r.response_headers,
+              COALESCE(LENGTH(r.response_headers), 0) AS response_headers_bytes,
+              t.tokens_in, t.tokens_out, t.cost,
+              t.started_at AS turn_started_at, t.ended_at AS turn_ended_at,
+              t.stop_reason AS turn_stop_reason, t.assistant_message AS turn_assistant_message
+         FROM llm_requests r
+         LEFT JOIN turns t
+           ON t.id = (
+                SELECT t2.id FROM turns t2
+                 WHERE t2.session_id = r.session_id AND t2.run_seq = r.run_seq AND t2.turn_index = r.turn_index
+                 ORDER BY t2.id DESC LIMIT 1
+              )
+        WHERE r.session_id = ? AND r.request_seq = ?`,
+    )
+    .get(sessionId, requestSeq) as
+    | (Omit<RequestDetail, "payload" | "response_headers" | "turn_usage"> & {
+        payload: string | null;
+        response_headers: string | null;
+        turn_assistant_message: string | null;
+      })
+    | undefined;
+  if (row === undefined) return null;
+
+  const assistant = row.turn_assistant_message === null ? null : safeParse(row.turn_assistant_message);
+  const usage =
+    typeof assistant === "object" && assistant !== null && "usage" in assistant
+      ? (assistant as { usage?: unknown }).usage ?? null
+      : null;
+
+  // `turn_assistant_message` 只用来取 usage，不往页面传（整条助手消息可能很大）
+  const { turn_assistant_message: _assistantMessage, ...rest } = row;
+  return plain({
+    ...rest,
+    payload: row.payload === null ? null : safeParse(row.payload),
+    response_headers: row.response_headers === null ? null : safeParse(row.response_headers),
+    turn_usage: usage,
+  }) as RequestDetail;
 }
 
 /**

@@ -1,15 +1,22 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
 import { prepareRequestValue, RequestTracker } from "../ext/request.ts";
-import { requestSeqStore } from "../ext/seq-store.ts";
+import { sessionCursorStore } from "../ext/session-cursor.ts";
 
 const NOW = "2026-10-19T10:00:00.000Z";
 const now = () => NOW;
-const meta = { provider: "deepseek", api: "openai-completions", model: "deepseek-flash" };
+const meta = {
+  provider: "deepseek",
+  api: "openai-completions",
+  model: "deepseek-flash",
+  runSeq: 2,
+  turnIndex: 5,
+};
 
 test("请求 payload：先脱敏，payload_bytes 记脱敏前的原始字节数", () => {
   const payload = {
@@ -63,6 +70,8 @@ test("请求序号：每次请求自增，重试是一条新记录而不是覆�
   assert.equal(first.provider, "deepseek");
   assert.equal(first.api, "openai-completions");
   assert.equal(first.model, "deepseek-flash");
+  assert.equal(first.run_seq, 2, "请求关联到发起它的运行");
+  assert.equal(first.turn_index, 5, "请求关联到发起它的 Turn");
   assert.equal(first.payload_bytes, Buffer.byteLength(JSON.stringify({ model: "m" }), "utf8"));
   assert.equal(first.status, null);
   assert.deepEqual(saved, [5]);
@@ -112,23 +121,31 @@ test("请求 payload 不可序列化时不让 handler 抛错", () => {
   assert.deepEqual(prepared.value, { unserializable: true, original_bytes: 0 });
 });
 
-test("请求序号游标：跨实例读到同一个值，文件权限 0600", () => {
-  const dir = mkdtempSync(join(tmpdir(), "pi-observer-seq-"));
+test("会话游标：request_seq 与 run_seq 跨实例继续，文件权限 0600", () => {
+  const dir = mkdtempSync(join(tmpdir(), "pi-observer-cursor-"));
   try {
     const tokenFile = join(dir, "token");
-    const store = requestSeqStore(tokenFile, "session/with:odd*chars");
-    assert.equal(store.load(), 0, "首次没有游标");
+    const sessionId = "session/with:odd*chars";
+    const store = sessionCursorStore(tokenFile, sessionId);
+    assert.deepEqual(store.load(), { requestSeq: 0, runSeq: 0 }, "首次没有游标");
 
-    store.save(7);
-    assert.equal(store.load(), 7);
+    store.save({ requestSeq: 7, runSeq: 3 });
+    assert.deepEqual(store.load(), { requestSeq: 7, runSeq: 3 });
     assert.equal(statSync(store.file).mode & 0o777, 0o600);
-    assert.equal(readFileSync(store.file, "utf8").trim(), "7");
+    assert.deepEqual(JSON.parse(readFileSync(store.file, "utf8")), { requestSeq: 7, runSeq: 3 });
 
-    assert.equal(requestSeqStore(tokenFile, "session/with:odd*chars").load(), 7, "新实例接着用");
-    assert.equal(requestSeqStore(tokenFile, "another-session").load(), 0, "不同会话互不影响");
+    assert.deepEqual(sessionCursorStore(tokenFile, sessionId).load(), { requestSeq: 7, runSeq: 3 }, "新实例接着用");
+    assert.deepEqual(sessionCursorStore(tokenFile, "another-session").load(), { requestSeq: 0, runSeq: 0 }, "不同会话互不影响");
 
-    writeFileSync(store.file, "not-a-number", "utf8");
-    assert.equal(store.load(), 0, "坏文件按 0 处理，不抛错");
+    // 兼容旧的 request-seq/<hash>.seq：只有 request_seq，run_seq 从 0 开始
+    const legacyId = "legacy-session";
+    const legacyKey = createHash("sha256").update(legacyId).digest("hex").slice(0, 32);
+    mkdirSync(join(dir, "request-seq"), { recursive: true });
+    writeFileSync(join(dir, "request-seq", `${legacyKey}.seq`), "5\n", "utf8");
+    assert.deepEqual(sessionCursorStore(tokenFile, legacyId).load(), { requestSeq: 5, runSeq: 0 });
+
+    writeFileSync(store.file, "not-json", "utf8");
+    assert.deepEqual(store.load(), { requestSeq: 0, runSeq: 0 }, "坏文件按 0 处理，不抛错");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

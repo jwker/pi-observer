@@ -113,6 +113,9 @@ export interface RequestRecord {
   response_headers: unknown;
   correlation: "serial_assumed";
   created_at: string;
+  /** 请求发生时所在的运行 / Turn；用于关联 turns 的 token 与成本 */
+  run_seq: number | null;
+  turn_index: number | null;
 }
 
 /** 工具调用；`tool_call_id` 是持久键，执行中按同一行 upsert */

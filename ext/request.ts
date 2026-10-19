@@ -22,6 +22,8 @@ export interface RequestMeta {
   provider: string | null;
   api: string | null;
   model: string | null;
+  runSeq: number | null;
+  turnIndex: number | null;
 }
 
 export interface PreparedRequestValue {
@@ -165,6 +167,8 @@ export class RequestTracker {
       response_headers: null,
       correlation: "serial_assumed",
       created_at: this.now(),
+      run_seq: meta.runSeq,
+      turn_index: meta.turnIndex,
     };
   }
 
@@ -188,6 +192,8 @@ export class RequestTracker {
       response_headers: prepared.value,
       correlation: "serial_assumed",
       created_at: this.now(),
+      run_seq: null,
+      turn_index: null,
     };
   }
 }

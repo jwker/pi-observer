@@ -32,6 +32,14 @@ export function openDb(path: string): Db {
   return db;
 }
 
+/** 新增可空列的幂等迁移：`CREATE TABLE IF NOT EXISTS` 不会给旧表补列 */
+function ensureColumn(db: Db, table: string, column: string, type: string): void {
+  const columns = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+  if (!columns.some((item) => item.name === column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+  }
+}
+
 /** 幂等迁移；只用 `PRAGMA user_version` 记版本，不做破坏性变更 */
 export function migrate(db: Db): void {
   const row = db.prepare("PRAGMA user_version").get() as { user_version?: number } | undefined;
@@ -44,6 +52,9 @@ export function migrate(db: Db): void {
 
   withTx(db, () => {
     db.exec(SCHEMA_SQL);
+    // v3：请求记录补运行 / Turn 关联，用于 join turns 的 token 与成本。旧行保持 NULL。
+    ensureColumn(db, "llm_requests", "run_seq", "INTEGER");
+    ensureColumn(db, "llm_requests", "turn_index", "INTEGER");
     db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
   });
   log("info", "db", "schema 已就绪", { from: current, to: SCHEMA_VERSION });

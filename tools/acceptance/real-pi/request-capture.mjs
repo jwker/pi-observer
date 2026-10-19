@@ -127,8 +127,18 @@ try {
 
   db = await openTempDb(dataDir);
   let rows;
+  let joined;
   try {
     rows = db.prepare("SELECT * FROM llm_requests ORDER BY request_seq").all();
+    joined = db
+      .prepare(
+        `SELECT r.request_seq, r.run_seq, r.turn_index, t.message_entry_id, t.tokens_in, t.tokens_out
+           FROM llm_requests r
+           LEFT JOIN turns t
+             ON t.session_id = r.session_id AND t.run_seq = r.run_seq AND t.turn_index = r.turn_index
+          ORDER BY r.request_seq`,
+      )
+      .all();
   } finally {
     db.close();
   }
@@ -151,6 +161,9 @@ try {
     有响应头: rows.every((row) => row.response_headers !== null),
     "payload_bytes > 0": rows.every((row) => Number(row.payload_bytes) > 0),
     截断行数: rows.filter((row) => Number(row.payload_truncated) === 1).length,
+    有运行与Turn: rows.every((row) => row.run_seq !== null && row.turn_index !== null),
+    关联到Turn: joined.filter((row) => row.message_entry_id !== null).length,
+    有token: joined.filter((row) => row.tokens_in !== null).length,
   };
   console.log("\n=== 3. 结果 ===");
   console.table([result]);
@@ -163,6 +176,9 @@ try {
   if (!result.有状态码) problems.push("有记录没拿到响应状态码");
   if (!result.有响应头) problems.push("有记录没拿到响应头");
   if (!result["payload_bytes > 0"]) problems.push("有记录的 payload_bytes 是 0");
+  if (!result.有运行与Turn) problems.push("有请求记录没带 run_seq / turn_index");
+  if (result.关联到Turn === 0) problems.push("请求没有关联到任何 Turn（token 与成本会显示为空）");
+  if (result.有token === 0) problems.push("关联到的 Turn 没有 token");
   if (first.logged.length !== firstRows.length) {
     problems.push(`第一次运行打印了 ${first.logged.length} 条请求摘要、库里 ${firstRows.length} 行`);
   }
@@ -192,7 +208,8 @@ try {
   } else {
     console.log(
       `\n✔ 请求记录：第一次 #${firstRows.map((row) => row.request_seq).join(",")}，` +
-        `--resume 后 #${secondSeqs.join(",")}（未覆盖）；状态码与响应头齐全，payload_bytes 与打印一致`,
+        `--resume 后 #${secondSeqs.join(",")}（未覆盖）；状态码与响应头齐全，payload_bytes 与打印一致；` +
+        `${result.关联到Turn}/${rows.length} 条请求关联到 Turn，token 可读`,
     );
   }
 } catch (error) {

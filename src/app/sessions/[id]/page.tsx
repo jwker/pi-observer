@@ -2,12 +2,12 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { MessageTree } from "@/components/message-tree.tsx";
-import { Timeline } from "@/components/timeline.tsx";
+import { SessionViews } from "@/components/session-views.tsx";
 import { ensureSessionBackfilled } from "@/lib/backfill.ts";
 import { dateTime, formatCost, formatTokens, relativeTime } from "@/lib/format.ts";
 import { getDb } from "@/lib/db.ts";
 import { log } from "@/lib/log.ts";
-import { countMessages, getSession, listEvents, listMessageIndex, listTurns, probeStatus } from "@/lib/queries.ts";
+import { countMessages, countRequests, getSession, listEvents, listMessageIndex, listRequests, listTurns, probeStatus } from "@/lib/queries.ts";
 
 export const dynamic = "force-dynamic";
 
@@ -37,6 +37,8 @@ export default async function SessionPage({ params }: { params: Promise<{ id: st
   // 消息树只取索引（不带 payload）：单条 payload 可以到 512 KB，整页塞进来首屏就废了
   const messages = listMessageIndex(id, 5000, db);
   const entryCount = countMessages(id, db);
+  const requests = listRequests(id, 200, db);
+  const requestTotal = countRequests(id, db);
   const probe = probeStatus(db);
   const state = STATE_LABELS[session.state] ?? STATE_LABELS.ended;
 
@@ -109,7 +111,13 @@ export default async function SessionPage({ params }: { params: Promise<{ id: st
 
       <div className="session-layout" style={{ marginTop: 14 }}>
         <MessageTree sessionId={id} initialMessages={messages} totalEntries={entryCount} />
-        <Timeline sessionId={id} initialEvents={events} initialTurns={turns} />
+        <SessionViews
+          sessionId={id}
+          initialEvents={events}
+          initialTurns={turns}
+          initialRequests={requests}
+          requestTotal={requestTotal}
+        />
       </div>
 
       <div className="notice" style={{ marginTop: 14 }}>

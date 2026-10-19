@@ -1,8 +1,10 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useState, type ReactNode } from "react";
 
-import { clockTime, formatCost, formatDuration, formatTokens, previewJson, shortId } from "@/lib/format.ts";
+import Link from "next/link";
+
+import { clockTime, formatBytes, formatCost, formatDuration, formatTokens, previewJson, shortId } from "@/lib/format.ts";
 import { groupTimeline, isRunning, latestProgress, summarizeTurn, type TimelineGroup } from "@/lib/timeline.ts";
 import type { EventRow, TurnRow } from "@/lib/types.ts";
 import { useStreamEvent } from "./hooks.ts";
@@ -11,6 +13,8 @@ interface TimelineProps {
   sessionId: string;
   initialEvents: EventRow[];
   initialTurns: TurnRow[];
+  /** 嵌在会话详情页的标签页里时不再套一层 `.panel` */
+  embedded?: boolean;
 }
 
 const LAYER_CLASS: Record<string, string> = {
@@ -72,6 +76,20 @@ function describeEvent(event: EventRow): { text: string; note?: string; code?: s
       return { text: payload.aborted === true ? "已中止" : "正常结束", note: "会话是否空闲以此为准" };
     case "session_info_changed":
       return { text: `名称 → ${payload.name === null ? "（清空）" : String(payload.name ?? "—")}` };
+    case "provider_request": {
+      const bytes = typeof payload.payloadBytes === "number" ? payload.payloadBytes : null;
+      return {
+        text: `${String(payload.provider ?? "—")} / ${String(payload.api ?? "—")} / ${String(payload.model ?? "—")}`,
+        note: `payload ${formatBytes(bytes)}${payload.payloadTruncated === true ? "（已截断）" : ""}`,
+      };
+    }
+    case "provider_response":
+      return {
+        text: `状态 ${String(payload.status ?? "—")}`,
+        note: `请求 #${String(payload.requestSeq ?? "—")} · 响应头 ${Array.isArray(payload.headerNames) ? payload.headerNames.length : 0} 个`,
+      };
+    case "provider_response_unmatched":
+      return { text: `状态 ${String(payload.status ?? "—")}`, note: "没有配对的请求记录" };
     case "model_select":
       return { text: `模型 → ${String(payload.model ?? "—")}`, note: `来源 ${String(payload.source ?? "—")}` };
     case "thinking_level_select":
@@ -83,7 +101,7 @@ function describeEvent(event: EventRow): { text: string; note?: string; code?: s
   }
 }
 
-export function Timeline({ sessionId, initialEvents, initialTurns }: TimelineProps) {
+export function Timeline({ sessionId, initialEvents, initialTurns, embedded = false }: TimelineProps) {
   const [events, setEvents] = useState<EventRow[]>(initialEvents);
   const [turns, setTurns] = useState<TurnRow[]>(initialTurns);
   const [liveText, setLiveText] = useState(true);
@@ -140,7 +158,7 @@ export function Timeline({ sessionId, initialEvents, initialTurns }: TimelinePro
   };
 
   return (
-    <div className="panel">
+    <PanelShell embedded={embedded}>
       <div className="panel-head">
         <span>时间线</span>
         <span className="count">
@@ -184,7 +202,7 @@ export function Timeline({ sessionId, initialEvents, initialTurns }: TimelinePro
 
         {groups.map((group, index) => {
           const last = index === groups.length - 1;
-          if (group.turnIndex === null) return renderSessionBox(group, collapsed, toggle, showTools);
+          if (group.turnIndex === null) return renderSessionBox(group, collapsed, toggle, showTools, sessionId);
           return renderTurnBox({
             group,
             turn: turnsByKey.get(group.key),
@@ -194,11 +212,17 @@ export function Timeline({ sessionId, initialEvents, initialTurns }: TimelinePro
             liveText,
             showThinking,
             showTools,
+            sessionId,
           });
         })}
       </div>
-    </div>
+    </PanelShell>
   );
+}
+
+function PanelShell({ embedded, children }: { embedded: boolean; children: ReactNode }) {
+  if (embedded) return <>{children}</>;
+  return <div className="panel">{children}</div>;
 }
 
 function renderSessionBox(
@@ -206,6 +230,7 @@ function renderSessionBox(
   collapsed: Set<string>,
   toggle: (key: string) => void,
   showTools: boolean,
+  sessionId: string,
 ) {
   const isCollapsed = collapsed.has("session");
   return (
@@ -219,7 +244,7 @@ function renderSessionBox(
       </div>
       <div className="turn-body">
         {group.events.map((event) => (
-          <EventLine key={event.id} event={event} showTools={showTools} />
+          <EventLine key={event.id} event={event} showTools={showTools} sessionId={sessionId} />
         ))}
       </div>
     </div>
@@ -235,8 +260,9 @@ function renderTurnBox(input: {
   liveText: boolean;
   showThinking: boolean;
   showTools: boolean;
+  sessionId: string;
 }) {
-  const { group, turn, isLast, collapsed, onToggle, liveText, showThinking, showTools } = input;
+  const { group, turn, isLast, collapsed, onToggle, liveText, showThinking, showTools, sessionId } = input;
   const summary = summarizeTurn(group, turn);
   const running = isRunning(group, isLast);
   const progress = running ? latestProgress(group) : null;
@@ -277,7 +303,7 @@ function renderTurnBox(input: {
             const thinking = typeof payload.thinking === "string" ? payload.thinking : "";
             return (
               <div key={event.id}>
-                <EventLine event={event} showTools={showTools} />
+                <EventLine event={event} showTools={showTools} sessionId={sessionId} />
                 {thinking !== "" && showThinking ? (
                   <div className="ev depth-1 thinking">
                     <span className="time" />
@@ -302,7 +328,7 @@ function renderTurnBox(input: {
               </div>
             );
           }
-          return <EventLine key={event.id} event={event} showTools={showTools} />;
+          return <EventLine key={event.id} event={event} showTools={showTools} sessionId={sessionId} />;
         })}
       </div>
     </div>
@@ -360,10 +386,15 @@ function renderProgress(event: EventRow, options: { running: boolean; liveText: 
   );
 }
 
-function EventLine({ event, showTools }: { event: EventRow; showTools: boolean }) {
+function EventLine({ event, showTools, sessionId }: { event: EventRow; showTools: boolean; sessionId: string }) {
   const description = describeEvent(event);
   const isTool = event.layer === "tool";
   if (isTool && !showTools) return null;
+  const payload = (event.payload ?? {}) as Record<string, unknown>;
+  const requestSeq =
+    (event.event_type === "provider_request" || event.event_type === "provider_response") && typeof payload.requestSeq === "number"
+      ? payload.requestSeq
+      : null;
 
   return (
     <div className={`ev ${isTool ? "tool" : ""}`}>
@@ -374,6 +405,14 @@ function EventLine({ event, showTools }: { event: EventRow; showTools: boolean }
       <span className="body">
         {description.text}
         {description.note ? <span className="note"> · {description.note}</span> : null}
+        {requestSeq === null ? null : (
+          <>
+            {" "}
+            <Link className="note" href={`/sessions/${encodeURIComponent(sessionId)}/requests/${requestSeq}`}>
+              查看请求 #{requestSeq}
+            </Link>
+          </>
+        )}
         {event.event_id.startsWith("progress:") ? null : (
           <span className="note"> · {shortId(event.event_id, 8)}</span>
         )}

@@ -90,17 +90,18 @@ pi-observer/
       reconcile.ts              agent_settled 后对账、session_shutdown → ended（定时器）
       tree.ts                   消息树的父子结构、当前分支、过滤、图标（纯函数）
       session-view.ts           会话列表的状态口径、分组排序、筛选（纯函数）
+      request-view.ts           请求状态色、payload 分段与 usage 读取（纯函数）
       retention.ts              7 天清理 + 空间回收
       sse.ts                    订阅表与广播
       log.ts                    单行 JSON 日志
   ext/
     index.ts                    探针入口（Pi 直接加载，不参与 Next 构建）
     request.ts                  请求 payload 脱敏/截断、request_seq 与串行配对（纯逻辑）
-    seq-store.ts                请求序号的跨进程游标（data/request-seq/）
+    session-cursor.ts           request_seq / run_seq 的跨进程游标（data/session-cursor/）
   probes/                       一次性测量脚本（已验证的测量代码）
   test/                         node --test 用例
   public/                       静态资源
-  data/                         observer.db · token · request-seq/（已在 .gitignore）
+  data/                         observer.db · token · session-cursor/（已在 .gitignore）
   next.config.ts                含 agentRules: false（不让 Next 生成 AGENTS.md）
   tsconfig.json / package.json
 ```
@@ -160,7 +161,7 @@ pi-observer/
 - Pi 用 **jiti** 加载扩展（`dist/core/extensions/loader.js`），会做转译，所以严格来说不受 strip-only 限制；`--extension` 指向目录里的 `index.ts` 也受支持（已从源码确认）。
 - 但探针里仍**建议不用 `enum` / `namespace`**，因为探针的纯逻辑（队列、合并、脱敏、请求序号）最容易也最值得用 `node --test` 直接测，而 Node 直跑时 strip-only 限制是真实存在的。
 - 请求 payload 在探针侧先脱敏、再按单条上限截断；服务端收到后再脱敏一次（防御纵深），不假设客户端一定做对。
-- 请求序号写 `data/request-seq/<会话哈希>.seq`，只为跨 Pi 进程续跑时不覆盖旧记录；不写 Pi 的会话文件。
+- `request_seq` / `run_seq` 写 `data/session-cursor/<会话哈希>.json`，只为跨 Pi 进程续跑时不覆盖旧请求与旧运行；不写 Pi 的会话文件。本地游标缺失时从看板的 `/api/sessions/:id/cursor` 取最大序号种子化。
 - 探针不进入 Next 的构建范围，`ext/` 不是 `src/` 下的内容。
 
 ---
@@ -283,7 +284,7 @@ SSE 实现要点（已实测，附录 C.3）：
 | 类型检查 | `next typegen && tsc --noEmit`（框架自带，不额外引工具） |
 | 覆盖率 | `npm run coverage`（`node --test --experimental-test-coverage`，内置，不引依赖）。只统计被测试 import 的模块，`src/app/**` 与 `src/components/**` 不计入 |
 | 一次跑完 | `npm run check` = 单测 + 类型检查 + 构建 |
-| 端到端 | `npm run accept`：档 A 离线验收，23 项断言，跑在临时数据目录与空闲端口上，无副作用。`npm run verify` = `check` + `accept` |
+| 端到端 | `npm run accept`：档 A 离线验收，24 项断言，跑在临时数据目录与空闲端口上，无副作用。`npm run verify` = `check` + `accept` |
 | 真实 Pi | `tools/acceptance/real-pi/`：卡顿 A/B、强杀恢复、HMR、端到端延迟、消息数对照、写入时读取、请求采集。会花 token 或杀端口，详见该目录 README |
 | 不引 | vitest / jest。若将来真要为 React 组件写断言，再加 vitest，到那时再说 |
 

@@ -124,3 +124,49 @@ test("user_version 高于程序支持时拒绝启动", () => {
     cleanup();
   }
 });
+
+test("v2 → v3 迁移：给 llm_requests 补 run_seq / turn_index，旧行保留", () => {
+  const { path, cleanup } = tempDbPath();
+  const old = new Db(path);
+  old.exec(`
+    CREATE TABLE llm_requests (
+      id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id         TEXT NOT NULL,
+      request_seq        INTEGER NOT NULL,
+      provider           TEXT,
+      api                TEXT,
+      model              TEXT,
+      payload            TEXT,
+      payload_bytes      INTEGER NOT NULL DEFAULT 0,
+      payload_truncated  INTEGER NOT NULL DEFAULT 0,
+      status             INTEGER,
+      response_headers   TEXT,
+      correlation        TEXT NOT NULL DEFAULT 'serial_assumed',
+      created_at         TEXT NOT NULL,
+      UNIQUE (session_id, request_seq)
+    );
+    INSERT INTO llm_requests (session_id, request_seq, created_at)
+      VALUES ('old-session', 1, '2026-10-19T00:00:00.000Z');
+    PRAGMA user_version = 2;
+  `);
+  old.close();
+
+  const migrated = openDb(path);
+  try {
+    const columns = (migrated.prepare("PRAGMA table_info(llm_requests)").all() as Array<{ name: string }>).map(
+      (item) => item.name,
+    );
+    assert.ok(columns.includes("run_seq"), "补上 run_seq");
+    assert.ok(columns.includes("turn_index"), "补上 turn_index");
+    const row = migrated
+      .prepare("SELECT run_seq, turn_index FROM llm_requests WHERE session_id = 'old-session'")
+      .get() as { run_seq: number | null; turn_index: number | null };
+    assert.equal(row.run_seq, null, "旧行保持 NULL，不编造关联");
+    assert.equal(row.turn_index, null);
+    const version = migrated.prepare("PRAGMA user_version").get() as { user_version: number };
+    assert.equal(version.user_version, SCHEMA_VERSION);
+  } finally {
+    migrated.close();
+    cleanup();
+  }
+});
