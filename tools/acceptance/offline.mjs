@@ -686,6 +686,121 @@ try {
       assertIncludes(html, "共 1 个会话", "页头的会话总数");
       return `1 行：摘要含用户正文、状态标未对账；概览指标齐全且未对账会话数 1`;
     });
+
+    // ── 档 A 续：M2-5 对账与状态推进 ────────────────────────────────────────
+    await checks.check("A20", "agent_settled 之后对账：补齐文件里新增的条目，live 变 merged", async () => {
+      // 模拟「这一轮结束时 Pi 才把最后一条写完」：先追加进文件，再用批量写入报 settle
+      appendFileSync(
+        bfPath,
+        bfLine({
+          type: "message",
+          id: "bf-a3",
+          parentId: "bf-a2",
+          timestamp: "2026-10-19T08:00:09.000Z",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "对账补读标记-ACCEPT-RECONCILE" }],
+            usage: { input: 7, output: 8, cost: { total: 0.003 } },
+            stopReason: "stop",
+          },
+        }),
+        "utf8",
+      );
+
+      const posted = await postBatch(bfBase, bfToken, {
+        protocol: 1,
+        probe_version: "0.1.0",
+        dropped_count: 0,
+        queue_depth: 0,
+        records: [
+          {
+            kind: "session",
+            session_id: BF_SID,
+            cwd: BF_CWD,
+            file_path: bfPath,
+            parent_session: null,
+            version: 3,
+            name: null,
+            started_at: "2026-10-19T08:00:00.000Z",
+            last_activity_at: nowIso(),
+            state: "idle",
+            source: "live",
+          },
+          {
+            kind: "event",
+            event_id: "ev-settle-1",
+            session_id: BF_SID,
+            layer: "agent",
+            event_type: "agent_settled",
+            payload: { runSeq: 1, aborted: false },
+            occurred_at: nowIso(),
+            run_seq: 1,
+            turn_index: 0,
+          },
+        ],
+      });
+      assertEqual(posted.status, 200, "写入状态与 settle 事件的状态码");
+
+      // 刚写完：会话状态来自探针的 session 记录；条目还没补——对账在 3 秒后
+      const mid = await openTempDb(bfDataDir);
+      const midState = mid.prepare("SELECT state FROM sessions WHERE session_id = ?").get(BF_SID).state;
+      const midEntries = mid.prepare("SELECT COUNT(*) AS n FROM messages WHERE entry_id = 'bf-a3'").get().n;
+      mid.close();
+      assertEqual(midState, "idle", "agent_settled 后会话状态是 idle（探针直接给出）");
+      assertEqual(midEntries, 0, "对账之前，文件里新增的条目还没入库");
+
+      // 等对账落地（3 秒定时器 + 余量）
+      let seen = null;
+      for (let i = 0; i < 40; i += 1) {
+        const db = await openTempDb(bfDataDir);
+        const session = db.prepare("SELECT source, last_reconciled_at FROM sessions WHERE session_id = ?").get(BF_SID);
+        const entries = db.prepare("SELECT COUNT(*) AS n FROM messages WHERE entry_id = 'bf-a3'").get().n;
+        db.close();
+        if (session.last_reconciled_at !== null && entries === 1) {
+          seen = { ...session, entries };
+          break;
+        }
+        await sleep(200);
+      }
+      assert(seen !== null, "8 秒内没有完成对账");
+      assertEqual(seen.source, "merged", "实时 + 回填都见过 → merged");
+      assertEqual(seen.entries, 1, "对账补上了文件里新增的条目");
+      return `settle 后 8 秒内对账：bf-a3 入库、source merged、last_reconciled_at ${seen.last_reconciled_at}`;
+    });
+
+    await checks.check("A21", "session_shutdown：会话推进到已结束，概览里出现核对时间", async () => {
+      const posted = await postBatch(bfBase, bfToken, {
+        protocol: 1,
+        probe_version: "0.1.0",
+        dropped_count: 0,
+        queue_depth: 0,
+        records: [
+          {
+            kind: "event",
+            event_id: "ev-shutdown-1",
+            session_id: BF_SID,
+            layer: "session",
+            event_type: "session_shutdown",
+            payload: { reason: "quit", targetSessionFile: null },
+            occurred_at: nowIso(),
+            run_seq: 1,
+            turn_index: 0,
+          },
+        ],
+      });
+      assertEqual(posted.status, 200, "写入 shutdown 事件的状态码");
+
+      const db = await openTempDb(bfDataDir);
+      const state = db.prepare("SELECT state FROM sessions WHERE session_id = ?").get(BF_SID).state;
+      db.close();
+      assertEqual(state, "ended", "关闭事件到达后状态推进到 ended");
+
+      const list = await getJson(`${bfBase}/api/sessions`);
+      assertEqual(list.json.sessions[0].state, "ended", "列表接口里的状态");
+      assertEqual(list.json.stats.unreconciled_sessions, 0, "对账过的会话不再算未对账");
+      assert(list.json.stats.last_reconciled_at !== null, "概览里的最近对账不再是空");
+      return `关闭事件 → state ended；列表已不再是「未对账」，最近对账 ${list.json.stats.last_reconciled_at}`;
+    });
   } finally {
     await bfServer.stop();
   }

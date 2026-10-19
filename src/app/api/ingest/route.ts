@@ -1,8 +1,10 @@
 import { ensureToken, tokensMatch } from "@/lib/auth.ts";
 import { config } from "@/lib/config.ts";
+import { getDb } from "@/lib/db.ts";
 import { jsonError, readBodyCapped } from "@/lib/http.ts";
 import { applyBatch, parseBatch } from "@/lib/ingest.ts";
 import { log } from "@/lib/log.ts";
+import { afterIngest } from "@/lib/reconcile.ts";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -39,7 +41,15 @@ export async function POST(req: Request): Promise<Response> {
   }
 
   try {
-    const result = applyBatch(parsed.batch);
+    const result = applyBatch(parsed.batch, getDb());
+    // 落库之后才推进状态、排对账（PRD §9.3）：写库失败时不该留下「已结束」或待对账的定时器
+    const followUp = afterIngest(parsed.batch.records);
+    if (followUp.ended.length > 0 || followUp.scheduled.length > 0) {
+      log("info", "ingest", "批次后的状态推进", {
+        ended: followUp.ended,
+        scheduled: followUp.scheduled,
+      });
+    }
     return Response.json(result);
   } catch (error) {
     log("error", "ingest", "写入失败", { error: (error as Error).message });

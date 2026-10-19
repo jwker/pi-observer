@@ -1,5 +1,5 @@
 import { config } from "./config.ts";
-import { Db, getDb, withTx } from "./db.ts";
+import { Db, withTx } from "./db.ts";
 import { log } from "./log.ts";
 import {
   PROBE_PROTOCOL_VERSION,
@@ -206,8 +206,13 @@ export function parseBatch(raw: unknown): ParseResult {
   };
 }
 
-/** 整批写在一个事务里，写完再广播 SSE（PRD §8.4） */
-export function applyBatch(batch: IngestBatch, db: Db = getDb()): IngestResponse {
+/**
+ * 整批写在一个事务里，写完再广播 SSE（PRD §8.4）。
+ *
+ * `db` 故意**没有默认值**：写库的调用方必须明说自己写哪个库，
+ * 否则测试里漏传时就会静默写进真实的 `data/observer.db`（踩过一次）。
+ */
+export function applyBatch(batch: IngestBatch, db: Db): IngestResponse {
   const maxPayload = config().payloadMaxBytes;
   const applied: Record<string, number> = {};
   const touched = new Set<string>();

@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { dateTime, formatBytes, shortId } from "@/lib/format.ts";
 import { buildMessageTree, describeNode, visibleEntryIds, type TreeNode } from "@/lib/tree.ts";
 import type { MessageDetail, MessageIndexRow } from "@/lib/types.ts";
+import { useStreamEvent } from "./hooks.ts";
 
 interface MessageTreeProps {
   sessionId: string;
@@ -84,6 +85,15 @@ export function MessageTree({ sessionId, initialMessages, totalEntries }: Messag
       setReloading(false);
     }
   }, [sessionId]);
+
+  // 对账（agent_settled 后 3 秒）会把这一轮的条目补进文件，服务端广播时带 reconciled: true；
+  // 只在这种情况下重拉索引——跟着每个 session.updated 走的话，长会话里就是每几百毫秒拉一次全量。
+  useStreamEvent((event, data) => {
+    if (event !== "session.updated") return;
+    if (data.session_id !== sessionId) return;
+    if (data.reconciled !== true) return;
+    void reload();
+  });
 
   const context: RowContext = {
     activeId,
@@ -187,7 +197,7 @@ export function MessageTree({ sessionId, initialMessages, totalEntries }: Messag
           <span style={{ color: "var(--green)" }}>⑂</span> 是分叉起点，
           <span className="faint">灰字「非当前分支」</span>表示它不在最后一条条目到根的父链上，
           <span style={{ color: "var(--amber)" }}>▣</span> 是压缩摘要。
-          树是文件落盘后的快照：正在生成的消息要等写进文件、下一次刷新才出现。
+          树是文件落盘后的快照：对账（<code>agent_settled</code> 后 3 秒）会自动重读一次，正在生成的消息要等它写进文件。
           {truncated > 0 ? ` 这一页只渲染了前 ${messages.length} 条，文件里共 ${totalEntries} 条。` : ""}
           {tree.orphans > 0 ? ` 有 ${tree.orphans} 条条目的父条目不在索引里，已按根节点显示。` : ""}
           {reloadError === null ? "" : ` 上次刷新失败：${reloadError}`}

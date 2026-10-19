@@ -573,6 +573,14 @@ CREATE INDEX idx_jsonl_files_session ON jsonl_files(session_id);
 - 会话结束（`agent_settled`）后 3 秒触发一次对账：重新读该文件，补齐实时丢失的部分，把 `source` 置为 `merged`。
 - 探针重启造成的 `runSeq` 断裂不影响持久数据：`run_seq` 只用于展示分组，持久键仍是条目 ID。
 
+对账的落地约定（M2-5）：
+
+- **触发**：`POST /api/ingest` 落库成功之后，从这一批记录里找出 `agent_settled` / `session_shutdown` 的会话，各自排一个 3 秒定时器（同一会话只留一个，新的重置计时）。定时器 `unref`，不拖住进程退出；进程正好在这 3 秒里退出，下次启动扫描会重新读文件，不会漏。
+- **动作**：按已有的增量读取补读一次（文件没变就只做两次 stat），然后写 `sessions.last_reconciled_at = now`，并广播一次 `session.updated`（带 `reconciled: true`）。页面只在看到 `reconciled: true` 时才重拉消息树——普通的 `session.updated` 每几百毫秒一次，不能都跟着重拉全量索引。
+- **不写没核对过的时间**：会话没有文件（例如只在探针里出现过的测试会话）时返回 `found: false`、不写 `last_reconciled_at`，日志里记一条警告，不冒充「已对账」。
+- **对账不动状态**：状态归探针管（`active` / `idle` 见 §11.1）；只有 `session_shutdown` 这一种情况由服务端推进到 `ended`。
+- **幂等**：对账只是补读 + 写核对时间；重复对账不会产生重复条目（持久键 upsert），也不会把 `ended` 改回去。
+
 ### 9.4 多会话并发
 
 - 每个会话目录独立处理，互不影响。
@@ -612,7 +620,7 @@ SSE 事件类型：`session.updated`、`turn.updated`、`tool.updated`、`reques
 - **分组与排序**：按 `cwd` 分组，组内与组间都按 `last_activity_at` 倒序；没有它就用 `started_at`，两者都没有的排最后（同一时间用会话 id 兜底，保证顺序稳定）。`cwd` 为空归到「（未知工作目录）」。
 - **每行的列**：会话短 ID（8 位）、首条用户消息摘要、状态、来源标记、消息数、Turn 数、工具数、输入 token、成本、最后活跃。
 - **摘要来源**：Pi 的会话文件头部没有会话名字段（实测只有 `cwd` / `id` / `timestamp` / `type` / `version`），所以摘要取这一会话第一条 `role=user` 正文（≤120 字符，行内再按列宽省略）；有 `name` 时优先用 `name`。没有用户消息就显示「—」，不编一个标题。
-- **四种显示状态**：在上面的三种之外加 `unreconciled`（未对账），只用于 `source=backfill` 的会话——它们从没收到过实时事件，`sessions.state` 是回填写的默认值，文件里没有进程或 agent 的状态，所以**不冒充「空闲」**。`agent_settled` 后的对账（M2-5）落地后，这些会话才会变成真实状态。状态筛选用的是显示状态，所以「空闲」不会筛出未对账的会话。
+- **四种显示状态**：在上面的三种之外加 `unreconciled`（未对账），只用于 `source=backfill` 的会话——它们从没收到过实时事件，`sessions.state` 是回填写的默认值，文件里没有进程或 agent 的状态，所以**不冒充「空闲」**。会话再跑一轮、完成一次对账后 `source` 变 `merged`，就按真实状态显示；只回填过、之后再没跑过的会话会一直是「未对账」——这是诚实的上限，不推定为「已结束」。状态筛选用的是显示状态，所以「空闲」不会筛出未对账的会话。
 - **概览条**（7 项）：活跃会话、会话总数、今日事件、今日 token、今日成本、累计丢弃、最近对账。
   - 「今日」= 服务器本地时区的今天 0 点。
   - 今日事件按 `events.received_at` 计数；回填不写事件，所以这项只反映实时活动。

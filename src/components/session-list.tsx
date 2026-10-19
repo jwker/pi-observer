@@ -245,7 +245,8 @@ export function SessionList({ initial, initialStats, totalSessions }: SessionLis
           <code>agent_start</code> 且尚未 <code>agent_settled</code>；<span className="badge warn">空闲</span> 已收到{" "}
           <code>agent_settled</code> 且 60 秒无新事件；<span className="badge">已结束</span> 探针报告会话进程已退出。
           <span className="badge plain">未对账</span> 只有会话文件回填、从没收到过实时事件——文件里没有进程或 agent
-          的状态，所以不能算「空闲」；对账（<code>agent_settled</code> 后的推进）在 M2-5 落地。
+          的状态，所以不能算「空闲」；会话再跑一轮、完成对账后（<code>agent_settled</code> 后 3
+          秒）<code>source</code> 变 <code>merged</code>，就按真实状态显示。
           来源标记：<code>live</code> 实时推送、<code>backfill</code> 从会话文件回填、<code>merged</code> 已对账。
           <br />
           概览按<strong>本机时区的今天 0 点</strong>算：今日事件只统计实时事件（回填不写事件），今日 token / 成本按 turn
