@@ -55,6 +55,9 @@ export function migrate(db: Db): void {
     // v3：请求记录补运行 / Turn 关联，用于 join turns 的 token 与成本。旧行保持 NULL。
     ensureColumn(db, "llm_requests", "run_seq", "INTEGER");
     ensureColumn(db, "llm_requests", "turn_index", "INTEGER");
+    // v4：工具调用补运行 / Turn 关联，用于按 Turn 筛选与详情页关联。
+    ensureColumn(db, "tool_calls", "run_seq", "INTEGER");
+    ensureColumn(db, "tool_calls", "turn_index", "INTEGER");
     db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
   });
   log("info", "db", "schema 已就绪", { from: current, to: SCHEMA_VERSION });

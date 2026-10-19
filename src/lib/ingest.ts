@@ -193,6 +193,8 @@ export function parseBatch(raw: unknown): ParseResult {
           duration_ms: intOrNull(item.duration_ms),
           started_at: str(item.started_at),
           ended_at: str(item.ended_at),
+          run_seq: intOrNull(item.run_seq),
+          turn_index: intOrNull(item.turn_index),
         });
         break;
       }
@@ -321,8 +323,8 @@ export function applyBatch(batch: IngestBatch, db: Db): IngestResponse {
     const upsertTool = db.prepare(`
       INSERT INTO tool_calls (
         tool_call_id, session_id, parent_tool_call_id, tool_name, args, result,
-        partial_result, is_error, duration_ms, started_at, ended_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        partial_result, is_error, duration_ms, started_at, ended_at, run_seq, turn_index
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(tool_call_id) DO UPDATE SET
         tool_name = CASE WHEN excluded.tool_name <> '' THEN excluded.tool_name ELSE tool_calls.tool_name END,
         parent_tool_call_id = COALESCE(excluded.parent_tool_call_id, tool_calls.parent_tool_call_id),
@@ -332,7 +334,9 @@ export function applyBatch(batch: IngestBatch, db: Db): IngestResponse {
         is_error = excluded.is_error,
         duration_ms = COALESCE(excluded.duration_ms, tool_calls.duration_ms),
         started_at = COALESCE(tool_calls.started_at, excluded.started_at),
-        ended_at = COALESCE(excluded.ended_at, tool_calls.ended_at)
+        ended_at = COALESCE(excluded.ended_at, tool_calls.ended_at),
+        run_seq = COALESCE(excluded.run_seq, tool_calls.run_seq),
+        turn_index = COALESCE(excluded.turn_index, tool_calls.turn_index)
     `);
 
     // 请求开始时写 payload，响应到达时用同一 (session_id, request_seq) 补状态码与 headers。
@@ -431,6 +435,8 @@ export function applyBatch(batch: IngestBatch, db: Db): IngestResponse {
             record.duration_ms,
             record.started_at,
             record.ended_at,
+            record.run_seq,
+            record.turn_index,
           );
           touched.add(record.session_id);
           bump("tool_call");

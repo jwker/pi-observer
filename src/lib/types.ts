@@ -60,6 +60,25 @@ export interface ToolCallRow {
   ended_at: string | null;
 }
 
+/** 工具列表的一行（PRD §11.2 视图三）：不带完整参数 / 结果，点进详情再取 */
+export interface ToolCallIndexRow extends ToolCallRow {
+  parent_tool_call_id: string | null;
+  run_seq: number | null;
+  turn_index: number | null;
+  args_bytes: number;
+  result_bytes: number;
+  partial_bytes: number;
+  /** 参数 JSON 的前 500 字符，用于列表摘要；完整参数在详情页 */
+  args_preview: string | null;
+}
+
+/** 工具详情：参数、结果与部分结果已解析 */
+export interface ToolCallDetail extends ToolCallIndexRow {
+  args: unknown;
+  result: unknown;
+  partial_result: unknown;
+}
+
 /**
  * 请求列表的一行（PRD §11.2 视图二）：不带 payload / headers，正文点开详情再取。
  * token 与成本来自同一 `(session_id, run_seq, turn_index)` 的 turn，没有关联 Turn 时为 null。

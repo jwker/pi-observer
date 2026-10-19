@@ -2,8 +2,9 @@
 
 import { useState } from "react";
 
-import type { EventRow, RequestIndexRow, TurnRow } from "@/lib/types.ts";
+import type { EventRow, RequestIndexRow, ToolCallIndexRow, TurnRow } from "@/lib/types.ts";
 import { Requests } from "./requests.tsx";
+import { Tools } from "./tools.tsx";
 import { Timeline } from "./timeline.tsx";
 
 interface SessionViewsProps {
@@ -12,9 +13,11 @@ interface SessionViewsProps {
   initialTurns: TurnRow[];
   initialRequests: RequestIndexRow[];
   requestTotal: number;
+  initialTools: ToolCallIndexRow[];
+  toolTotal: number;
 }
 
-type View = "timeline" | "requests";
+type View = "timeline" | "requests" | "tools";
 
 /**
  * 会话详情右侧的视图切换（PRD §11.2）。
@@ -27,9 +30,12 @@ export function SessionViews({
   initialTurns,
   initialRequests,
   requestTotal,
+  initialTools,
+  toolTotal,
 }: SessionViewsProps) {
   const [view, setView] = useState<View>("timeline");
   const [requestCount, setRequestCount] = useState(requestTotal);
+  const [toolCount, setToolCount] = useState(toolTotal);
 
   return (
     <div className="panel">
@@ -39,6 +45,9 @@ export function SessionViews({
         </button>
         <button type="button" className={view === "requests" ? "on" : ""} onClick={() => setView("requests")}>
           请求 <span className="tab-count">{requestCount}</span>
+        </button>
+        <button type="button" className={view === "tools" ? "on" : ""} onClick={() => setView("tools")}>
+          工具 <span className="tab-count">{toolCount}</span>
         </button>
       </div>
 
@@ -51,6 +60,14 @@ export function SessionViews({
           initialRequests={initialRequests}
           initialTotal={requestTotal}
           onTotalChange={setRequestCount}
+        />
+      </div>
+      <div className={view === "tools" ? "tabpanel on" : "tabpanel"}>
+        <Tools
+          sessionId={sessionId}
+          initialTools={initialTools}
+          initialTotal={toolTotal}
+          onTotalChange={setToolCount}
         />
       </div>
     </div>

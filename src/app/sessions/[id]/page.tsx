@@ -7,7 +7,18 @@ import { ensureSessionBackfilled } from "@/lib/backfill.ts";
 import { dateTime, formatCost, formatTokens, relativeTime } from "@/lib/format.ts";
 import { getDb } from "@/lib/db.ts";
 import { log } from "@/lib/log.ts";
-import { countMessages, countRequests, getSession, listEvents, listMessageIndex, listRequests, listTurns, probeStatus } from "@/lib/queries.ts";
+import {
+  countMessages,
+  countRequests,
+  countToolCalls,
+  getSession,
+  listEvents,
+  listMessageIndex,
+  listRequests,
+  listToolCallIndex,
+  listTurns,
+  probeStatus,
+} from "@/lib/queries.ts";
 
 export const dynamic = "force-dynamic";
 
@@ -39,6 +50,8 @@ export default async function SessionPage({ params }: { params: Promise<{ id: st
   const entryCount = countMessages(id, db);
   const requests = listRequests(id, 200, db);
   const requestTotal = countRequests(id, db);
+  const tools = listToolCallIndex(id, 500, db);
+  const toolTotal = countToolCalls(id, db);
   const probe = probeStatus(db);
   const state = STATE_LABELS[session.state] ?? STATE_LABELS.ended;
 
@@ -117,6 +130,8 @@ export default async function SessionPage({ params }: { params: Promise<{ id: st
           initialTurns={turns}
           initialRequests={requests}
           requestTotal={requestTotal}
+          initialTools={tools}
+          toolTotal={toolTotal}
         />
       </div>
 

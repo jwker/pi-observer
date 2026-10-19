@@ -125,7 +125,7 @@ test("user_version 高于程序支持时拒绝启动", () => {
   }
 });
 
-test("v2 → v3 迁移：给 llm_requests 补 run_seq / turn_index，旧行保留", () => {
+test("旧版迁移：给 llm_requests / tool_calls 补关联列，旧行保留", () => {
   const { path, cleanup } = tempDbPath();
   const old = new Db(path);
   old.exec(`
@@ -147,7 +147,22 @@ test("v2 → v3 迁移：给 llm_requests 补 run_seq / turn_index，旧行保�
     );
     INSERT INTO llm_requests (session_id, request_seq, created_at)
       VALUES ('old-session', 1, '2026-10-19T00:00:00.000Z');
-    PRAGMA user_version = 2;
+    CREATE TABLE tool_calls (
+      tool_call_id         TEXT PRIMARY KEY,
+      session_id           TEXT NOT NULL,
+      parent_tool_call_id  TEXT,
+      tool_name            TEXT NOT NULL DEFAULT '',
+      args                 TEXT,
+      result               TEXT,
+      partial_result       TEXT,
+      is_error             INTEGER NOT NULL DEFAULT 0,
+      duration_ms          INTEGER,
+      started_at           TEXT,
+      ended_at             TEXT
+    );
+    INSERT INTO tool_calls (tool_call_id, session_id, tool_name)
+      VALUES ('old-tool', 'old-session', 'bash');
+    PRAGMA user_version = 3;
   `);
   old.close();
 
@@ -163,6 +178,18 @@ test("v2 → v3 迁移：给 llm_requests 补 run_seq / turn_index，旧行保�
       .get() as { run_seq: number | null; turn_index: number | null };
     assert.equal(row.run_seq, null, "旧行保持 NULL，不编造关联");
     assert.equal(row.turn_index, null);
+
+    const toolColumns = (migrated.prepare("PRAGMA table_info(tool_calls)").all() as Array<{ name: string }>).map(
+      (item) => item.name,
+    );
+    assert.ok(toolColumns.includes("run_seq"), "工具调用补上 run_seq");
+    assert.ok(toolColumns.includes("turn_index"), "工具调用补上 turn_index");
+    const tool = migrated
+      .prepare("SELECT run_seq, turn_index FROM tool_calls WHERE tool_call_id = 'old-tool'")
+      .get() as { run_seq: number | null; turn_index: number | null };
+    assert.equal(tool.run_seq, null);
+    assert.equal(tool.turn_index, null);
+
     const version = migrated.prepare("PRAGMA user_version").get() as { user_version: number };
     assert.equal(version.user_version, SCHEMA_VERSION);
   } finally {

@@ -576,6 +576,8 @@ export default function probe(pi: ExtensionAPI): void {
         duration_ms: null,
         started_at: startedAt,
         ended_at: null,
+        run_seq: s.runStartedAt ? s.runSeq : null,
+        turn_index: s.turnStartedAt ? s.turnIndex : null,
       });
     }),
   );
@@ -623,6 +625,8 @@ export default function probe(pi: ExtensionAPI): void {
         duration_ms: typeof event.durationMs === "number" ? event.durationMs : null,
         started_at: partial?.startedAt ?? null,
         ended_at: endedAt,
+        run_seq: s.runStartedAt ? s.runSeq : null,
+        turn_index: s.turnStartedAt ? s.turnIndex : null,
       });
     }),
   );

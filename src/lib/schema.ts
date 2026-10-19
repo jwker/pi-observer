@@ -11,7 +11,7 @@
  * 旧行保持 NULL。要改列类型或加非空约束则必须先想清楚旧数据怎么办。
  */
 
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 export const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS sessions (
@@ -74,7 +74,9 @@ CREATE TABLE IF NOT EXISTS tool_calls (
   is_error             INTEGER NOT NULL DEFAULT 0,
   duration_ms          INTEGER,
   started_at           TEXT,
-  ended_at             TEXT
+  ended_at             TEXT,
+  run_seq              INTEGER,
+  turn_index           INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS llm_requests (

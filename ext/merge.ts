@@ -190,6 +190,8 @@ export class MergeTable {
         duration_ms: null,
         started_at: snapshot.startedAt,
         ended_at: null,
+        run_seq: null,
+        turn_index: null,
       });
     }
     return records;

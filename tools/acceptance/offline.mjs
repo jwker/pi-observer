@@ -1046,6 +1046,104 @@ try {
 
       return `列表 1 行：token 111 / 222、成本 0.043 来自关联 Turn；详情有脱敏 payload 与响应头；页面与接口 200，缺请求 404、非法 seq 400`;
     });
+
+    // ── 档 A 续：M3-4 工具列表与详情 ─────────────────────────────────────
+    await checks.check("A25", "工具列表与详情：按运行 / Turn 关联，参数、结果、部分结果按需取", async () => {
+      const posted = await postBatch(bfBase, bfToken, {
+        protocol: 2,
+        probe_version: "0.2.0",
+        dropped_count: 0,
+        queue_depth: 0,
+        records: [
+          {
+            kind: "tool_call",
+            tool_call_id: "accept-tool-1",
+            session_id: BF_SID,
+            parent_tool_call_id: null,
+            tool_name: "bash",
+            args: { command: "echo ACCEPT-TOOL" },
+            result: { role: "toolResult", content: [{ type: "text", text: "ACCEPT-TOOL-OUTPUT" }] },
+            partial_result: { role: "toolResult", content: [{ type: "text", text: "ACCEPT-TOOL-PARTIAL" }] },
+            is_error: false,
+            duration_ms: 42,
+            started_at: "2026-10-19T08:11:00.000Z",
+            ended_at: "2026-10-19T08:11:00.042Z",
+            run_seq: 9,
+            turn_index: 1,
+          },
+          {
+            kind: "tool_call",
+            tool_call_id: "accept-tool-2",
+            session_id: BF_SID,
+            parent_tool_call_id: null,
+            tool_name: "read",
+            args: { path: "docs/prd-v0.2.md" },
+            result: { role: "toolResult", content: [{ type: "text", text: "ACCEPT-TOOL-ERROR" }], isError: true },
+            partial_result: null,
+            is_error: true,
+            duration_ms: 7,
+            started_at: "2026-10-19T08:11:01.000Z",
+            ended_at: "2026-10-19T08:11:01.007Z",
+            run_seq: 9,
+            turn_index: 1,
+          },
+        ],
+      });
+      assertEqual(posted.status, 200, "写入工具调用的状态码");
+
+      const list = await getJson(`${bfBase}/api/sessions/${BF_SID}/tools`);
+      assertEqual(list.status, 200, "工具列表接口状态码");
+      // 回填的会话文件里已经有 1 次 read，本次再写 2 次
+      assertEqual(list.json.total, 3, "工具总数");
+      assertEqual(list.json.count, 3, "工具列表行数");
+      const success = list.json.tools.find((tool) => tool.tool_call_id === "accept-tool-1");
+      const failure = list.json.tools.find((tool) => tool.tool_call_id === "accept-tool-2");
+      assert(success && failure, "两条工具调用都在列表里");
+      assertEqual(success.tool_name, "bash", "工具名");
+      assertEqual(success.run_seq, 9, "运行序号");
+      assertEqual(success.turn_index, 1, "Turn 序号");
+      assertEqual(success.is_error, 0, "成功标记");
+      assertEqual(success.duration_ms, 42, "耗时");
+      assert(success.args_bytes > 0, "参数字节数");
+      assertIncludes(success.args_preview, "ACCEPT-TOOL", "参数预览");
+      assert(success.args === undefined, "列表行不带完整参数");
+      assert(success.result === undefined, "列表行不带结果");
+      assertEqual(failure.is_error, 1, "失败标记");
+
+      const detail = await getJson(`${bfBase}/api/sessions/${BF_SID}/tools?call=accept-tool-1`);
+      assertEqual(detail.status, 200, "工具详情接口状态码");
+      assertEqual(detail.json.tool.args.command, "echo ACCEPT-TOOL", "完整参数");
+      assertIncludes(detail.json.tool.result.content[0].text, "ACCEPT-TOOL-OUTPUT", "完整结果");
+      assertIncludes(detail.json.tool.partial_result.content[0].text, "ACCEPT-TOOL-PARTIAL", "部分结果");
+      const missing = await fetch(`${bfBase}/api/sessions/${BF_SID}/tools?call=accept-tool-missing`);
+      assertEqual(missing.status, 404, "不存在的工具调用 404");
+
+      const sessionPage = await fetch(`${bfBase}/sessions/${BF_SID}`);
+      const sessionHtml = await sessionPage.text();
+      assertIncludes(sessionHtml, "工具", "会话页有工具标签");
+      assertIncludes(sessionHtml, "bash", "工具行显示工具名");
+      assertIncludes(sessionHtml, `/sessions/${BF_SID}/tools/accept-tool-1`, "工具行链到详情页");
+      assertIncludes(sessionHtml, "ACCEPT-TOOL", "工具行显示参数预览");
+
+      const toolPage = await fetch(`${bfBase}/sessions/${BF_SID}/tools/accept-tool-1`);
+      const toolHtml = await toolPage.text();
+      assertEqual(toolPage.status, 200, "工具详情页状态码");
+      assertIncludes(toolHtml, "echo ACCEPT-TOOL", "首屏显示完整参数");
+      assertIncludes(toolHtml, "Turn 1", "首屏显示 Turn");
+      assertIncludes(toolHtml, `/sessions/${BF_SID}/requests/1`, "同 Turn 的请求链接");
+      assertIncludes(toolHtml, "成功", "成功徽标");
+
+      const errorDetail = await getJson(`${bfBase}/api/sessions/${BF_SID}/tools?call=accept-tool-2`);
+      assertEqual(errorDetail.status, 200, "失败工具详情接口状态码");
+      assertEqual(errorDetail.json.tool.is_error, 1, "失败标记");
+      assertIncludes(errorDetail.json.tool.result.content[0].text, "ACCEPT-TOOL-ERROR", "失败结果文本");
+      const errorPage = await fetch(`${bfBase}/sessions/${BF_SID}/tools/accept-tool-2`);
+      const errorHtml = await errorPage.text();
+      assertEqual(errorPage.status, 200, "失败工具详情页状态码");
+      assertIncludes(errorHtml, "失败", "失败徽标");
+
+      return `列表 3 行（含回填 1 条）：bash / read，run 9 / Turn 1；详情有完整参数、结果与部分结果；页面与接口 200，缺调用 404`;
+    });
   } finally {
     await bfServer.stop();
   }

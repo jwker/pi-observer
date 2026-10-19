@@ -132,6 +132,9 @@ export interface ToolCallRecord {
   duration_ms: number | null;
   started_at: string | null;
   ended_at: string | null;
+  /** 工具执行时所在的运行 / Turn（M3-4 起写入，用于按 Turn 筛选与关联） */
+  run_seq: number | null;
+  turn_index: number | null;
 }
 
 export type IngestRecord =

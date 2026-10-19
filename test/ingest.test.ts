@@ -63,6 +63,8 @@ function baseBatch(): IngestBatch {
         duration_ms: null,
         started_at: OCCURRED,
         ended_at: null,
+        run_seq: 1,
+        turn_index: 0,
       },
       {
         kind: "turn",
@@ -216,6 +218,8 @@ test("applyBatch：turn 与 tool_call 按持久键 upsert，后到的字段补�
           duration_ms: 186,
           started_at: null,
           ended_at: "2026-10-19T10:00:05.500Z",
+          run_seq: null,
+          turn_index: null,
         },
       ],
     };

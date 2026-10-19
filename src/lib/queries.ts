@@ -11,6 +11,8 @@ import type {
   SessionCursorRow,
   SessionListItem,
   SessionRow,
+  ToolCallDetail,
+  ToolCallIndexRow,
   ToolCallRow,
   TurnRow,
 } from "./types.ts";
@@ -26,6 +28,8 @@ export type {
   SessionCursorRow,
   SessionListItem,
   SessionRow,
+  ToolCallDetail,
+  ToolCallIndexRow,
   ToolCallRow,
   TurnRow,
 } from "./types.ts";
@@ -214,6 +218,58 @@ export function listToolCalls(sessionId: string, limit = 200, db: Db = getDb()):
     )
     .all(sessionId, limit) as unknown as ToolCallRow[];
   return rows.map(plain);
+}
+
+/** 工具列表（PRD §11.2 视图三 / M3-4）：不带完整 args / result，只带字节数与参数预览 */
+export function listToolCallIndex(sessionId: string, limit = 500, db: Db = getDb()): ToolCallIndexRow[] {
+  const rows = db
+    .prepare(
+      `SELECT tool_call_id, session_id, parent_tool_call_id, tool_name, is_error, duration_ms,
+              started_at, ended_at, run_seq, turn_index,
+              COALESCE(LENGTH(args), 0) AS args_bytes,
+              COALESCE(LENGTH(result), 0) AS result_bytes,
+              COALESCE(LENGTH(partial_result), 0) AS partial_bytes,
+              substr(args, 1, 500) AS args_preview
+         FROM tool_calls WHERE session_id = ?
+        ORDER BY COALESCE(started_at, '') ASC
+        LIMIT ?`,
+    )
+    .all(sessionId, limit) as unknown as ToolCallIndexRow[];
+  return rows.map(plain);
+}
+
+export function countToolCalls(sessionId: string, db: Db = getDb()): number {
+  const row = db.prepare("SELECT COUNT(*) AS n FROM tool_calls WHERE session_id = ?").get(sessionId) as { n: number };
+  return row.n;
+}
+
+/** 单条工具调用详情（点击列表时进详情页，按需取完整参数、结果与部分结果） */
+export function getToolCallDetail(sessionId: string, toolCallId: string, db: Db = getDb()): ToolCallDetail | null {
+  const row = db
+    .prepare(
+      `SELECT tool_call_id, session_id, parent_tool_call_id, tool_name, is_error, duration_ms,
+              started_at, ended_at, run_seq, turn_index,
+              COALESCE(LENGTH(args), 0) AS args_bytes,
+              COALESCE(LENGTH(result), 0) AS result_bytes,
+              COALESCE(LENGTH(partial_result), 0) AS partial_bytes,
+              substr(args, 1, 500) AS args_preview,
+              args, result, partial_result
+         FROM tool_calls WHERE session_id = ? AND tool_call_id = ?`,
+    )
+    .get(sessionId, toolCallId) as
+    | (Omit<ToolCallDetail, "args" | "result" | "partial_result"> & {
+        args: string | null;
+        result: string | null;
+        partial_result: string | null;
+      })
+    | undefined;
+  if (row === undefined) return null;
+  return plain({
+    ...row,
+    args: row.args === null ? null : safeParse(row.args),
+    result: row.result === null ? null : safeParse(row.result),
+    partial_result: row.partial_result === null ? null : safeParse(row.partial_result),
+  }) as ToolCallDetail;
 }
 
 /**

@@ -416,6 +416,7 @@ Pi 的数据分散在两处，且没有统一界面：
 | `is_error` | INTEGER | |
 | `duration_ms` | INTEGER NULL | |
 | `started_at` / `ended_at` | TEXT | |
+| `run_seq` / `turn_index` | INTEGER NULL | 工具执行时所在的运行 / Turn（M3-4 起写入；用于按 Turn 筛选与详情关联） |
 
 **llm_requests**
 
@@ -666,7 +667,7 @@ SSE 事件类型：`session.updated`、`turn.updated`、`tool.updated`、`reques
 
 1. **时间线**：Session / Agent / Turn / Message / Tool 事件按时间排列，Turn 作为可折叠容器。
 2. **请求**：每次模型请求一行（序号、provider / api / model、状态码、时间、输入 / 输出 token、payload 字节数、成本）；点进详情看脱敏 payload（按顶层键折叠）、响应头、usage 与关联信息；标注"序列化前"与"按顺序关联"。
-3. **工具**：按名称、Turn、是否出错筛选，展示参数、结果、耗时。
+3. **工具**：按名称、Turn、是否出错筛选，展示参数、结果、耗时；点进详情看完整参数、最终结果与部分结果，并关联到同 Turn 的模型请求。
 
 实时正文：开启时，正在生成的助手消息以半透明样式逐段出现，每 500 ms 更新一次；关闭时显示"生成中…"。
 
@@ -747,6 +748,7 @@ pi --extension /absolute/path/to/pi-observer/ext
 - 记录的 `payload_bytes` 与触发时打印的原始长度一致；超过上限时 `payload_truncated` 为 1。
 - 状态码与响应头可见。
 - 会话详情页能切换到请求视图；列表行显示序号、模型、状态、时间、token、payload 字节与成本；详情页显示脱敏 payload、响应头、usage（含缓存读写）与关联的 run / Turn。
+- 会话详情页能切换到工具视图；列表显示工具名、参数预览、Turn、耗时、成功 / 失败与开始时间；详情页显示完整参数、最终结果、部分结果，并关联到同 Turn 的模型请求。
 
 ### M4 打磨
 
