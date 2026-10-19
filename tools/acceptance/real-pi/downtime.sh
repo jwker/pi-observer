@@ -27,7 +27,7 @@ curl -s $BASE/api/health; echo
 
 echo "=== 1. 起一个长会话（探针已加载）==="
 nohup pi -p -a --session-dir $OUT/sessions --extension $REPO/ext \
-  "请用 bash 执行 sleep 45，然后用一句话回答：完成。" \
+  "用 bash 连续执行三次 sleep 12（每次单独一次工具调用），每次之后用一句话说明第几次完成。" \
   > $OUT/pi.out 2> $OUT/pi.err &
 PI_PID=$!
 echo "Pi PID=$PI_PID"

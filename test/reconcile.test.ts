@@ -187,6 +187,16 @@ test("对账：读文件、补条目、记 last_reconciled_at，live 变 merged"
       row(f.db, "SELECT last_reconciled_at FROM sessions WHERE session_id = 's1'").last_reconciled_at,
       "2026-10-19T09:05:00.000Z",
     );
+
+    // 文件没变时 `backfillFile` 会直接跳过、不碰 source：对账自己要把 live 置成 merged
+    f.db.prepare("UPDATE sessions SET source = 'live' WHERE session_id = 's1'").run();
+    const third = reconcileSession("s1", f.ctx);
+    assert.equal(third.entries, 0, "第三次对账文件仍然没变");
+    assert.equal(
+      row(f.db, "SELECT source FROM sessions WHERE session_id = 's1'").source,
+      "merged",
+      "没补到新条目也要算对过账",
+    );
   } finally {
     f.cleanup();
   }

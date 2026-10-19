@@ -4,7 +4,7 @@
 
 | 档 | 命令 | 需要什么 | 会不会有副作用 | 覆盖什么 |
 |:--|:--|:--|:--|:--|
-| **A 离线** | `npm run accept` | 什么都不需要（首次会自动 `next build`） | 没有。跑在临时数据目录与空闲端口上 | 建库 → 写入 → 落库 → SSE → 页面 → 回填 → 消息树 → 会话列表 → 对账与状态推进，共 21 项断言 |
+| **A 离线** | `npm run accept` | 什么都不需要（首次会自动 `next build`） | 没有。跑在临时数据目录与空闲端口上 | 建库 → 写入 → 落库 → SSE → 页面 → 回填 → 消息树 → 会话列表 → 对账与状态推进 → 截短重读，共 22 项断言 |
 | **B 真实 Pi** | 见下表 | `pi` 在 PATH 上、真实服务端在跑、会在真实会话里调用模型 | **有**：花 token；其中两条会杀 4173 的监听进程 | PRD §14 里「探针不卡顿 / 强杀恢复 / 读写并发」这些只能在真实会话上量的判据 |
 
 `npm test` 与 `npm run check` 是单元测试与类型/构建检查，不在这里；`npm run verify` =
@@ -12,7 +12,7 @@
 
 ## 档 A：`npm run accept`
 
-21 项检查（A1–A21）。A1–A13 在第一个隔离实例上：
+22 项检查（A1–A22）。A1–A13 在第一个隔离实例上：
 
 健康检查、空库页面、无令牌与错令牌被拒、超大请求体被拒、合法批次落库、重复投递幂等、
 单条超大 payload 被截断打标、写入到可见的延迟、SSE 逐帧推送、会话详情页可打开且含正文、
@@ -45,6 +45,7 @@ A20–A21 同一个隔离实例，覆盖 M2-5 对账与状态推进：
 |:--|:--|
 | A20 | `agent_settled` 后 3 秒对账：settle 时先断言条目还没入库，等定时器落地后文件里新增的条目入库、`source` 变 `merged`、`last_reconciled_at` 有值 |
 | A21 | `session_shutdown`：服务端把状态推进到 `ended`；列表里不再是「未对账」，概览的「最近对账」不再是空 |
+| A22 | 会话文件被截短（模拟整文件重写）：识别为「变了」并从头重读，行数 = 去重后的 entry_id 数（不产生重复条目） |
 
 隔离靠三件事，所以它**永远不会碰你的真实数据**：
 
@@ -62,7 +63,9 @@ A20–A21 同一个隔离实例，覆盖 M2-5 对账与状态推进：
 | `node tools/acceptance/real-pi/latency.mjs [cwd关键字] [秒数]` | PRD §14 M1 第 1 条（2 秒内可见） | 只读，不花钱；测量期间需要真的在跟 Pi 对话 |
 | `node tools/acceptance/real-pi/overhead.mjs [轮数]` | PRD §14 M1 第 2 条（偏差 ≤ 10%） | **调用真实模型**（默认 12 次请求） |
 | `zsh tools/acceptance/real-pi/downtime.sh` | PRD §14 M1 第 3 条（强杀恢复） | **调用真实模型**，并**杀掉 4173 的监听进程**后自行重启 |
-| `zsh tools/acceptance/real-pi/hmr.sh` | 技术选型 §14 检查 4（HMR 不锁库） | **杀掉 4173 的监听进程**并改起 `next dev`；临时改 `src/app/page.tsx` 后恢复 |
+| `zsh tools/acceptance/real-pi/hmr.sh` | 技术选型 §14 检查 4（HMR 不锁库） | **杀掉 4173 的监听进程**并改起 `next dev`；临时改 `src/app/page.tsx` 后恢复；跑完 4173 上是 dev，要换回生产服务得手动重启 |
+| `node tools/acceptance/real-pi/tree-compare.mjs [cwd关键字]` | PRD §14 M2 第 1 条（消息数与 Pi 的 `/tree` 一致） | 只读；用 `pi --export` 导出的 `{header, entries, leafId}` 与看板逐条对照。**不调模型** |
+| `node tools/acceptance/real-pi/live-session.mjs ["提示词"]` | PRD §14 M2 第 2 条（写入时读取不失败）+ M2-5 的 settle→idle + M1 第 1 条（事件延迟） | **调用真实模型**（1 轮）；起隔离实例（临时库 + 临时会话目录 + 空闲端口），不碰真实的 `data/` 与 4173 |
 
 前两条的前置是「`npm run start` 已经在跑」；`latency.mjs` 的服务端地址可用
 `PI_OBSERVER_URL` 覆盖。脚本产物（日志、临时会话文件）都写在
@@ -72,5 +75,9 @@ A20–A21 同一个隔离实例，覆盖 M2-5 对账与状态推进：
 
 - `src/app/**` 与 `src/components/**` 没有自动覆盖：档 A 只验证它们「能被打开、包含应有内容」，
   不验证交互细节（实时正文开关、分页、筛选这些靠人看）。
+- `tree-compare.mjs` 依赖 `pi --export` 的内嵌 `session-data`（base64 的 `{header, entries, leafId}`）。
+  升级 Pi 后如果导出结构变了，脚本会直接报错而不是悄悄通过。
+- `live-session.mjs` 的 `pi -p` 跑完就退出，**看不到 idle 停留窗口**：它记录的是 settle 的入库延迟
+  （idle 与 settle 在探针的同一批里写入），以及最终状态 `ended`。
 - 档 A 的延迟是直投 HTTP 的往返，不含探针的 300 ms 批量间隔；那条在 `latency.mjs` 里量。
 - 冒烟通过不等于验收通过：里程碑判据以 `docs/prd-v0.2.md` §14 为准，档 B 才是那些判据的证据来源。

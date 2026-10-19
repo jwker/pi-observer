@@ -9,7 +9,7 @@
  *
  * 记录形状与 `ext/index.ts` 发出的完全一致——它就是「探针 ↔ 服务端」的唯一线上契约。
  */
-import { appendFileSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import {
@@ -800,6 +800,48 @@ try {
       assertEqual(list.json.stats.unreconciled_sessions, 0, "对账过的会话不再算未对账");
       assert(list.json.stats.last_reconciled_at !== null, "概览里的最近对账不再是空");
       return `关闭事件 → state ended；列表已不再是「未对账」，最近对账 ${list.json.stats.last_reconciled_at}`;
+    });
+
+    // ── 档 A 续：M2-6 会话文件被截短（模拟重写）────────────────────────────
+    await checks.check("A22", "文件被截短：识别为重写并从头重读，不产生重复条目", async () => {
+      // 截成「头部 + 前两条条目」，模拟整文件重写（版本迁移 / fork）
+      const lines = readFileSync(bfPath, "utf8").split("\n").filter((line) => line !== "");
+      writeFileSync(bfPath, `${lines.slice(0, 3).join("\n")}\n`, "utf8");
+
+      const before = await openTempDb(bfDataDir);
+      const beforeCount = before.prepare("SELECT COUNT(*) AS n FROM messages").get().n;
+      const beforeDistinct = before.prepare("SELECT COUNT(DISTINCT entry_id) AS n FROM messages").get().n;
+      before.close();
+
+      const response = await fetch(`${bfBase}/api/backfill`, {
+        method: "POST",
+        headers: { "x-observer-token": bfToken },
+      });
+      const body = await response.json();
+      assertEqual(response.status, 200, "截短后触发回填的状态码");
+      assertEqual(body.summary.files, 1, "扫到的文件数");
+      assertEqual(body.summary.changed, 1, "截短应被识别为「变了」而不是跳过");
+      assertEqual(body.summary.entries, 2, "重读产出的条目数（头部 + 2 条条目 → 2 条）");
+      assertEqual(body.summary.warnings.length, 0, "截短后重读不该有解析警告");
+
+      const db = await openTempDb(bfDataDir);
+      try {
+        const total = db.prepare("SELECT COUNT(*) AS n FROM messages").get().n;
+        const distinct = db.prepare("SELECT COUNT(DISTINCT entry_id) AS n FROM messages").get().n;
+        assertEqual(total, distinct, "不产生重复条目（行数 = 去重后的 entry_id 数）");
+        // 已知边界：已经不在文件里的条目不会从库里删除——我们分不清「文件被截短」和「读取提前结束」，
+        // 宁可多留也不误删。所以这里断言的是「没有多出来」，而不是「等于文件里的条目数」。
+        assertEqual(total, beforeCount, "截短后库里不会多出行（原来的条目保留）");
+        assertEqual(distinct, beforeDistinct, "entry_id 数不变");
+
+        const messageRows = db.prepare("SELECT COUNT(*) AS n FROM messages WHERE kind = 'message'").get().n;
+        const session = db.prepare("SELECT message_count FROM sessions WHERE session_id = ?").get(BF_SID);
+        assertEqual(session.message_count, messageRows, "message_count 只数 kind=message 的行（bf-m1 是 model_change）");
+      } finally {
+        db.close();
+      }
+
+      return `3 行文件 → 识别为重写、重读 2 条；${beforeCount} 条条目 / ${beforeDistinct} 个 id 不变，无重复（已不在文件里的条目保留，见 PRD §9.2）`;
     });
   } finally {
     await bfServer.stop();

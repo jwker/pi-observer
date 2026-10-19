@@ -566,6 +566,8 @@ CREATE INDEX idx_jsonl_files_session ON jsonl_files(session_id);
 4. 遇到无法解析的行：跳过并记一条警告，不中断整个文件。
 5. 不加文件锁。
 
+重写的已知边界（M2-6 实测）：从头重读只做 upsert，**不会删除「已经不在文件里」的条目**——我们分不清「文件被截短」和「读取提前结束」，宁可多留也不误删。因此人为截短文件后，库里的条目数可能大于文件里的条目数；正常路径（Pi 只追加，或重写时保留全部条目）不会出现这种差异。
+
 ### 9.3 实时与历史的拼接
 
 - **真相源是 JSONL**。实时事件用于"正在发生"的即时展示与活跃状态判断。
@@ -576,7 +578,7 @@ CREATE INDEX idx_jsonl_files_session ON jsonl_files(session_id);
 对账的落地约定（M2-5）：
 
 - **触发**：`POST /api/ingest` 落库成功之后，从这一批记录里找出 `agent_settled` / `session_shutdown` 的会话，各自排一个 3 秒定时器（同一会话只留一个，新的重置计时）。定时器 `unref`，不拖住进程退出；进程正好在这 3 秒里退出，下次启动扫描会重新读文件，不会漏。
-- **动作**：按已有的增量读取补读一次（文件没变就只做两次 stat），然后写 `sessions.last_reconciled_at = now`，并广播一次 `session.updated`（带 `reconciled: true`）。页面只在看到 `reconciled: true` 时才重拉消息树——普通的 `session.updated` 每几百毫秒一次，不能都跟着重拉全量索引。
+- **动作**：按已有的增量读取补读一次（文件没变就只做两次 stat），写 `sessions.last_reconciled_at = now` 并把 `source` 置为 `merged`（补读到新条目时 `backfillFile` 自己会置；文件自上次读过之后没变时它直接跳过、不碰 `source`，所以对账这一步必须自己写），然后广播一次 `session.updated`（带 `reconciled: true`）。页面只在看到 `reconciled: true` 时才重拉消息树——普通的 `session.updated` 每几百毫秒一次，不能都跟着重拉全量索引。
 - **不写没核对过的时间**：会话没有文件（例如只在探针里出现过的测试会话）时返回 `found: false`、不写 `last_reconciled_at`，日志里记一条警告，不冒充「已对账」。
 - **对账不动状态**：状态归探针管（`active` / `idle` 见 §11.1）；只有 `session_shutdown` 这一种情况由服务端推进到 `ended`。
 - **幂等**：对账只是补读 + 写核对时间；重复对账不会产生重复条目（持久键 upsert），也不会把 `ended` 改回去。

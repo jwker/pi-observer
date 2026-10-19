@@ -21,6 +21,7 @@ BASE=http://127.0.0.1:$PORT
 rm -rf $OUT && mkdir -p $OUT
 cd $REPO
 TOKEN=$(tr -d '\n' < data/token)
+RUN=$(date +%s)   # 每次跑用不同的事件 id：老 id 会被幂等忽略，看落库结果会看到上一轮的旧行
 
 echo "=== 停掉 4173 上的生产服务 ==="
 lsof -ti tcp:$PORT -sTCP:LISTEN | xargs kill -9 2>/dev/null
@@ -42,7 +43,7 @@ send () {
 }
 
 echo "=== 第一次写入 ==="
-send hmr-a
+send "hmr-$RUN-a"
 
 echo "=== 触发 HMR：改 page.tsx ==="
 cp src/app/page.tsx $OUT/page.tsx.bak
@@ -51,7 +52,7 @@ sleep 6
 curl -s -o /dev/null -w "GET / → HTTP %{http_code}\n" $BASE/
 
 echo "=== HMR 之后第二次写入 ==="
-send hmr-b
+send "hmr-$RUN-b"
 
 echo "=== 恢复 page.tsx ==="
 cp $OUT/page.tsx.bak src/app/page.tsx
@@ -59,6 +60,8 @@ sleep 3
 
 echo "=== 落库结果（两条都该在，说明连接没丢）==="
 sqlite3 data/observer.db "SELECT event_id, received_at FROM events WHERE session_id='hmr-test' ORDER BY id;"
+COUNT=$(sqlite3 data/observer.db "SELECT count(*) FROM events WHERE session_id='hmr-test' AND event_id LIKE 'hmr-$RUN-%';")
+echo "本轮落库事件数：$COUNT（应为 2）"
 
 echo "=== dev 日志里是否有锁/错误 ==="
 grep -iE "database is locked|SQLITE_BUSY|Error:|⨯" $OUT/dev.log | head -10
@@ -69,6 +72,11 @@ tail -6 $OUT/dev.log
 echo "=== 清理：删掉 hmr-test 的测试数据 ==="
 sqlite3 data/observer.db "DELETE FROM events WHERE session_id='hmr-test'; DELETE FROM sessions WHERE session_id='hmr-test';"
 sqlite3 data/observer.db "SELECT count(*) AS 剩余hmr行 FROM events WHERE session_id='hmr-test';"
+
+if [ "$COUNT" != "2" ]; then
+  echo "✘ 本轮事件没有全部落库：期望 2，实际 $COUNT"
+  exit 1
+fi
 
 echo "=== 产物 ==="
 echo "日志目录：$OUT"

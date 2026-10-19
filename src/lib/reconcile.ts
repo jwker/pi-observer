@@ -64,8 +64,11 @@ export function reconcileSession(sessionId: string, ctx: BackfillContext = creat
   const reconciledAt = read === null ? null : ctx.now();
 
   if (reconciledAt !== null) {
+    // 对账意味着「实时看到的都在文件里核对过一遍」。补读到新条目时 `backfillFile` 自己会把
+    // source 置成 merged；文件自上次读过之后没变时它直接跳过、不碰 source，所以这里统一写成
+    // merged——否则纯实时的会话第一次对账之后会一直显示「实时」，看起来像没对过账。
     ctx.db
-      .prepare("UPDATE sessions SET last_reconciled_at = ? WHERE session_id = ?")
+      .prepare("UPDATE sessions SET last_reconciled_at = ?, source = 'merged' WHERE session_id = ?")
       .run(reconciledAt, sessionId);
   }
 
