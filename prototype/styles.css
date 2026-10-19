@@ -176,6 +176,8 @@ code, kbd, pre { font-family: var(--mono); }
 }
 .probe-pill.offline { color: var(--amber); border-color: #6b5316; background: rgba(215, 161, 43, .06); }
 .probe-pill.bad { color: var(--red); border-color: #6d2b31; background: rgba(240, 97, 106, .06); }
+/* 「还不知道」的中性态：页面刚加载、SSE 还没建连时用，不能显示成故障 */
+.probe-pill.pending { color: var(--fg-3); }
 
 .pulse {
   width: 6px; height: 6px;
@@ -385,8 +387,13 @@ code, kbd, pre { font-family: var(--mono); }
 /* 事件类型标签 */
 .etype {
   font-size: 10px;
-  letter-spacing: .04em;
+  letter-spacing: .02em;
   text-transform: uppercase;
+  /* 真实事件类型最长 19 字符（tool_execution_update 等），96px 放不下会被挤到正文上；
+     列宽放到 132px，并留好不换行 + 省略号兜底 */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .etype.session  { color: var(--cyan); }
 .etype.agent    { color: var(--green); }
@@ -594,7 +601,7 @@ code, kbd, pre { font-family: var(--mono); }
 
 .ev {
   display: grid;
-  grid-template-columns: 62px 96px 1fr;
+  grid-template-columns: 62px 132px 1fr;
   gap: 10px;
   padding: 5px 10px 5px 8px;
   border-left: 2px solid transparent;

@@ -1,0 +1,57 @@
+"use client";
+
+import { useEffect, useState } from "react";
+
+import type { ProbeStatusRow } from "@/lib/types.ts";
+import { useNow, useStreamEvent, useStreamStatus } from "./hooks.ts";
+import type { StreamStatus } from "./stream-client.ts";
+
+export interface ProbeView {
+  probe: ProbeStatusRow | null;
+  /** 到看板服务的 SSE 连接状态（三态，页面刚加载时是 connecting） */
+  stream: StreamStatus;
+  /** 探针是否在最近 15 秒内推过数据 */
+  live: boolean;
+  subscribers: number;
+}
+
+const STALE_MS = 15000;
+
+export function useProbeStatus(): ProbeView {
+  const [probe, setProbe] = useState<ProbeStatusRow | null>(null);
+  const [subscribers, setSubscribers] = useState(0);
+  const stream = useStreamStatus();
+  const now = useNow(1000);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/health")
+      .then((response) => response.json())
+      .then((json: { probe?: ProbeStatusRow | null; subscribers?: number }) => {
+        if (cancelled) return;
+        setProbe(json.probe ?? null);
+        setSubscribers(json.subscribers ?? 0);
+      })
+      .catch(() => {
+        // 服务暂不可达时保持空状态
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useStreamEvent((event, data) => {
+    if (event !== "probe.status") return;
+    if (typeof data.connected === "boolean") return; // 连接确认帧，不含真实状态
+    setProbe((previous) => ({
+      last_seen_at: typeof data.last_seen_at === "string" ? data.last_seen_at : (previous?.last_seen_at ?? null),
+      dropped_count: typeof data.dropped_count === "number" ? data.dropped_count : (previous?.dropped_count ?? 0),
+      queue_depth: typeof data.queue_depth === "number" ? data.queue_depth : (previous?.queue_depth ?? 0),
+      probe_version: typeof data.probe_version === "string" ? data.probe_version : (previous?.probe_version ?? null),
+    }));
+  });
+
+  const live = probe?.last_seen_at ? now - Date.parse(probe.last_seen_at) < STALE_MS : false;
+
+  return { probe, stream, live, subscribers };
+}
