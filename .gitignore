@@ -2,5 +2,6 @@ node_modules/
 .next/
 out/
 data/
+.ai/
 *.log
 .DS_Store
