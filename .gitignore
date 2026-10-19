@@ -4,4 +4,5 @@ out/
 data/
 .ai/
 *.log
+*.tsbuildinfo
 .DS_Store
