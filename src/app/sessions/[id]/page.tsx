@@ -18,6 +18,7 @@ import {
   listToolCallIndex,
   listTurns,
   probeStatus,
+  sessionUsage,
 } from "@/lib/queries.ts";
 
 export const dynamic = "force-dynamic";
@@ -53,6 +54,7 @@ export default async function SessionPage({ params }: { params: Promise<{ id: st
   const tools = listToolCallIndex(id, 500, db);
   const toolTotal = countToolCalls(id, db);
   const probe = probeStatus(db);
+  const usage = sessionUsage(id, db);
   const state = STATE_LABELS[session.state] ?? STATE_LABELS.ended;
 
   return (
@@ -108,15 +110,27 @@ export default async function SessionPage({ params }: { params: Promise<{ id: st
             </div>
             <div className="metric">
               <span className="label">输入 token</span>
-              <span className="v up">↑ {formatTokens(session.tokens_in)}</span>
+              <span className="v up">↑ {formatTokens(usage.tokens_in)}</span>
             </div>
             <div className="metric">
               <span className="label">输出 token</span>
-              <span className="v down">↓ {formatTokens(session.tokens_out)}</span>
+              <span className="v down">↓ {formatTokens(usage.tokens_out)}</span>
+            </div>
+            <div className="metric">
+              <span className="label">缓存读取</span>
+              <span className="v" style={{ color: "var(--cyan)" }}>
+                {`R ${formatTokens(usage.cache_read)}`}
+              </span>
+            </div>
+            <div className="metric">
+              <span className="label">缓存写入</span>
+              <span className="v" style={{ color: "var(--cyan)" }}>
+                {`W ${formatTokens(usage.cache_write)}`}
+              </span>
             </div>
             <div className="metric">
               <span className="label">成本</span>
-              <span className="v cost">$ {formatCost(session.cost)}</span>
+              <span className="v cost">{`$ ${formatCost(usage.cost)}`}</span>
             </div>
           </div>
         </div>

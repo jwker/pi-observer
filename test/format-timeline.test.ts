@@ -112,6 +112,8 @@ test("Turn 汇总：工具次数、出错、耗时、stopReason、token", () => 
     thinking_level: "medium",
     tokens_in: 100,
     tokens_out: 20,
+    cache_read: 30,
+    cache_write: 40,
     cost: 0.01,
   };
 
@@ -143,6 +145,8 @@ test("Turn 汇总：工具次数、出错、耗时、stopReason、token", () => 
   assert.equal(summary.updateCount, 42);
   assert.equal(summary.hasText, true);
   assert.equal(summary.tokensIn, 100);
+  assert.equal(summary.cacheRead, 30);
+  assert.equal(summary.cacheWrite, 40);
   assert.equal(summary.cost, 0.01);
   assert.equal(summary.startedAt, "2026-10-19T10:00:01.000Z");
 });

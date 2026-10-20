@@ -289,7 +289,11 @@ function renderTurnBox(input: {
         )}
         {progress ? <span className="snap">快照 {progress.updateCount} · 500ms 节流</span> : null}
         <span className="faint">
-          ↑ {formatTokens(summary.tokensIn)} ↓ {formatTokens(summary.tokensOut)} · ${formatCost(summary.cost)}
+          ↑ {formatTokens(summary.tokensIn)} ↓ {formatTokens(summary.tokensOut)} ·{" "}
+          <span style={{ color: "var(--cyan)" }}>
+            R {formatTokens(summary.cacheRead)} W {formatTokens(summary.cacheWrite)}
+          </span>{" "}
+          · ${formatCost(summary.cost)}
         </span>
       </div>
       <div className="turn-body">

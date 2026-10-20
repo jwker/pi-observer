@@ -1,5 +1,5 @@
 import { getDb } from "@/lib/db.ts";
-import { listTurns } from "@/lib/queries.ts";
+import { listTurns, sessionUsage } from "@/lib/queries.ts";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -11,6 +11,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
   const limitRaw = Number(url.searchParams.get("limit") ?? "500");
   const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 1), 2000) : 500;
 
-  const turns = listTurns(id, limit, getDb());
-  return Response.json({ ok: true, count: turns.length, turns });
+  const db = getDb();
+  const turns = listTurns(id, limit, db);
+  return Response.json({ ok: true, count: turns.length, turns, usage: sessionUsage(id, db) });
 }

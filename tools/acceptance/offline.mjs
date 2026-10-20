@@ -1144,6 +1144,50 @@ try {
 
       return `列表 3 行（含回填 1 条）：bash / read，run 9 / Turn 1；详情有完整参数、结果与部分结果；页面与接口 200，缺调用 404`;
     });
+
+    // ── 档 A 续：M3-5 token 与成本汇总 ───────────────────────────────────
+    await checks.check("A26", "用量汇总：会话级与 Turn 级 token / 缓存 / 成本口径一致", async () => {
+      const payload = await getJson(`${bfBase}/api/sessions/${BF_SID}/turns`);
+      assertEqual(payload.status, 200, "Turn 列表接口状态码");
+      const turns = payload.json.turns ?? [];
+      const usage = payload.json.usage;
+      assert(usage, "接口应返回会话级 usage");
+
+      const sum = (key) => turns.reduce((total, turn) => total + (typeof turn[key] === "number" ? turn[key] : 0), 0);
+      assertEqual(usage.tokens_in, sum("tokens_in"), "会话输入 = Turn 输入之和");
+      assertEqual(usage.tokens_out, sum("tokens_out"), "会话输出 = Turn 输出之和");
+      assertEqual(usage.cache_read, sum("cache_read"), "会话缓存读取 = Turn 缓存读取之和");
+      assertEqual(usage.cache_write, sum("cache_write"), "会话缓存写入 = Turn 缓存写入之和");
+      assert(Math.abs(usage.cost - sum("cost")) < 1e-9, "会话成本 = Turn 成本之和");
+
+      // 合成文件 bf-a1：11 / 22 / R33 / W44 / $0.05；A15 的 bf-a2：5 / 6 / 无缓存 / $0.01；
+      // A20 的 bf-a3：7 / 8 / 无缓存 / $0.003；A24 的 Turn：111 / 222 / R33 / W44 / $0.043
+      assertEqual(usage.tokens_in, 134, "输入 token 汇总");
+      assertEqual(usage.tokens_out, 258, "输出 token 汇总");
+      assertEqual(usage.cache_read, 66, "缓存读取汇总");
+      assertEqual(usage.cache_write, 88, "缓存写入汇总");
+      assert(Math.abs(usage.cost - 0.106) < 1e-9, "成本汇总");
+
+      const a24Turn = turns.find((turn) => turn.run_seq === 9 && turn.turn_index === 1);
+      assert(a24Turn, "A24 的 Turn 在列表里");
+      assertEqual(a24Turn.cache_read, 33, "Turn 级缓存读取来自 usage");
+      assertEqual(a24Turn.cache_write, 44, "Turn 级缓存写入来自 usage");
+      const backfillTurn = turns.find((turn) => turn.run_seq === 1 && turn.turn_index === 0);
+      assert(backfillTurn, "回填 Turn 在列表里");
+      assertEqual(backfillTurn.cache_read, 33, "回填 Turn 的缓存读取");
+      assertEqual(backfillTurn.cache_write, 44, "回填 Turn 的缓存写入");
+
+      const page = await fetch(`${bfBase}/sessions/${BF_SID}`);
+      const html = await page.text();
+      assertEqual(page.status, 200, "会话详情页状态码");
+      assertIncludes(html, "缓存读取", "顶部有缓存读取指标");
+      assertIncludes(html, "缓存写入", "顶部有缓存写入指标");
+      assertIncludes(html, "R 66", "会话级缓存读取显示为 66");
+      assertIncludes(html, "W 88", "会话级缓存写入显示为 88");
+      assertIncludes(html, "$ 0.11", "会话级成本显示为 0.11");
+
+      return `会话 134 / 258 / R66 / W88 / $0.106；Turn 级缓存 33 / 44；顶部状态条与接口一致`;
+    });
   } finally {
     await bfServer.stop();
   }

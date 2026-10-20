@@ -6,9 +6,10 @@
  * 打开 TUI 对照——直接拿 Pi 自己导出的数据模型与看板逐条比对：
  *
  *   1. 条目 id 与顺序一致；
- *   2. `type === "message"` 的条目数 = 库里的 `message_count`；
+ *   2. `type === "message"` 的条目数 = 库里索引里 `kind=message` 的行数（不看可能滞后的 sessions 汇总）；
  *   3. `leafId`（当前分支的叶）= 我们按行号取的最后一条；
- *   4. 头部 `id` / `cwd` 与库里一致。
+ *   4. 头部 `id` / `cwd` 与库里一致；
+ *   5. M3-5：从 entries 现算 token / 缓存读写 / 成本，与 `/turns` 返回的会话级 usage 一致。
  *
  * 前置：`npm run start` 在跑（只读接口），`pi` 在 PATH 上。
  * **不调用模型、不花钱**；会为每个会话生成一次 HTML 导出（写在临时目录，跑完删掉）。
@@ -48,6 +49,22 @@ async function json(url) {
 
 const text = (value) => String(value ?? "");
 
+/** 从 Pi 导出的 entries 里现算用量；只认 assistant 消息的 usage */
+function piUsage(entries) {
+  const total = { tokens_in: 0, tokens_out: 0, cache_read: 0, cache_write: 0, cost: 0 };
+  for (const entry of entries ?? []) {
+    if (entry?.type !== "message" || entry?.message?.role !== "assistant") continue;
+    const usage = entry.message.usage;
+    if (!usage || typeof usage !== "object") continue;
+    total.tokens_in += typeof usage.input === "number" ? usage.input : 0;
+    total.tokens_out += typeof usage.output === "number" ? usage.output : 0;
+    total.cache_read += typeof usage.cacheRead === "number" ? usage.cacheRead : 0;
+    total.cache_write += typeof usage.cacheWrite === "number" ? usage.cacheWrite : 0;
+    total.cost += typeof usage.cost?.total === "number" ? usage.cost.total : 0;
+  }
+  return total;
+}
+
 const list = await json(`${base}/api/sessions?limit=1000`);
 const withFile = (list.sessions ?? []).filter((row) => row.file_path && text(row.cwd).includes(keyword));
 const sessions = withFile.filter((row) => existsSync(row.file_path));
@@ -76,18 +93,31 @@ for (const session of sessions) {
   const ours = await json(
     `${base}/api/sessions/${encodeURIComponent(session.session_id)}/messages?limit=20000`,
   );
+  const turnsPayload = await json(
+    `${base}/api/sessions/${encodeURIComponent(session.session_id)}/turns?limit=2000`,
+  );
+  const expectedUsage = piUsage(pi.entries);
+  const actualUsage = turnsPayload.usage ?? {};
 
   const piIds = (pi.entries ?? []).map((entry) => entry.id);
   const ourIds = (ours.messages ?? []).map((row) => row.entry_id);
   const piMessages = (pi.entries ?? []).filter((entry) => entry.type === "message").length;
+  const ourMessages = (ours.messages ?? []).filter((row) => row.kind === "message").length;
   const ourLeaf = ourIds.length === 0 ? null : ourIds[ourIds.length - 1];
 
   const sameIds = piIds.length === ourIds.length && piIds.every((id, index) => id === ourIds[index]);
-  const sameCount = piMessages === session.message_count;
+  const sameCount = piMessages === ourMessages;
   const sameLeaf = (pi.leafId ?? null) === ourLeaf;
   const sameHeader = pi.header?.id === session.session_id && text(pi.header?.cwd) === text(session.cwd);
+  const sameUsage = [
+    "tokens_in",
+    "tokens_out",
+    "cache_read",
+    "cache_write",
+  ].every((key) => Number(actualUsage[key] ?? 0) === Number(expectedUsage[key] ?? 0));
+  const sameCost = Math.abs(Number(actualUsage.cost ?? 0) - expectedUsage.cost) < 1e-6;
 
-  const ok = sameIds && sameCount && sameLeaf && sameHeader;
+  const ok = sameIds && sameCount && sameLeaf && sameHeader && sameUsage && sameCost;
   if (!ok) failures += 1;
 
   rows.push({
@@ -96,16 +126,22 @@ for (const session of sessions) {
     "Pi 条目": piIds.length,
     库里条目: ourIds.length,
     "Pi 消息": piMessages,
-    库里消息: session.message_count,
+    库里消息: ourMessages,
     leaf: sameLeaf ? "一致" : `${pi.leafId ?? "—"} ≠ ${ourLeaf ?? "—"}`,
+    用量: sameUsage && sameCost ? "一致" : "不一致",
   });
 
   if (!ok) {
     console.log(`✘ ${session.session_id}`);
     console.log(`  条目 ${piIds.length} vs ${ourIds.length}（${sameIds ? "id 与顺序一致" : "id 或顺序不一致"}）`);
-    console.log(`  消息 ${piMessages} vs ${session.message_count}`);
+    console.log(`  消息 ${piMessages} vs ${ourMessages}`);
     console.log(`  leaf ${pi.leafId ?? "—"} vs ${ourLeaf ?? "—"}`);
     console.log(`  头部 id/cwd ${sameHeader ? "一致" : "不一致"}（Pi cwd=${pi.header?.cwd}，库里 cwd=${session.cwd}）`);
+    if (!sameUsage || !sameCost) {
+      console.log(
+        `  用量 Pi=${JSON.stringify(expectedUsage)} 库里=${JSON.stringify(actualUsage)}`,
+      );
+    }
   }
 }
 
@@ -117,7 +153,7 @@ const totalPiMessages = rows.reduce((sum, row) => sum + row["Pi 消息"], 0);
 
 console.log(
   `\n${failures === 0 ? "✔" : "✘"} 逐条对照：${rows.length} 个会话、${totalPi} 条条目、${totalPiMessages} 条消息；` +
-    `库里 ${totalOur} 条条目${failures === 0 ? "，全部一致" : `，${failures} 个会话不一致`}`,
+    `库里 ${totalOur} 条条目${failures === 0 ? "，条目与用量全部一致" : `，${failures} 个会话不一致`}`,
 );
 
 process.exit(failures === 0 ? 0 : 1);

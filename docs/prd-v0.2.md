@@ -671,6 +671,12 @@ SSE 事件类型：`session.updated`、`turn.updated`、`tool.updated`、`reques
 
 实时正文：开启时，正在生成的助手消息以半透明样式逐段出现，每 500 ms 更新一次；关闭时显示"生成中…"。
 
+用量的落地约定（M3-5）：
+
+- **会话级**：输入 / 输出 token 与成本来自 `turns` 行求和；缓存读取 / 写入来自助手消息的 `usage.cacheRead` / `usage.cacheWrite`。顶部状态条显示这五项。
+- **Turn 级**：时间线每个 Turn 的头部显示该 Turn 的输入 / 输出 token、缓存读写与成本，数据与请求详情里的 usage 同源。
+- **口径一致**：实时路径与文件回填都写同一张 `turns` 表，所以两种来源不会各算一套；与 Pi 导出的 `usage` 的逐会话对照见 `tools/acceptance/real-pi/tree-compare.mjs`。
+
 ### 11.3 探针状态
 
 页脚显示：最近一次推送时间、队列深度、累计丢弃数。丢弃数大于 0 时高亮。
@@ -749,6 +755,7 @@ pi --extension /absolute/path/to/pi-observer/ext
 - 状态码与响应头可见。
 - 会话详情页能切换到请求视图；列表行显示序号、模型、状态、时间、token、payload 字节与成本；详情页显示脱敏 payload、响应头、usage（含缓存读写）与关联的 run / Turn。
 - 会话详情页能切换到工具视图；列表显示工具名、参数预览、Turn、耗时、成功 / 失败与开始时间；详情页显示完整参数、最终结果、部分结果，并关联到同 Turn 的模型请求。
+- 会话顶部显示输入 / 输出 token、缓存读取 / 写入与成本；时间线 Turn 头显示同一 Turn 的 token、缓存与成本；与 JSONL 中 assistant 消息的 `usage` 求和一致。
 
 ### M4 打磨
 

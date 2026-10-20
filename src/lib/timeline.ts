@@ -55,6 +55,8 @@ export interface TurnSummary {
   hasText: boolean;
   tokensIn: number | null;
   tokensOut: number | null;
+  cacheRead: number | null;
+  cacheWrite: number | null;
   cost: number | null;
   startedAt: string | null;
   endedAt: string | null;
@@ -71,6 +73,8 @@ export function summarizeTurn(group: TimelineGroup, turn?: TurnRow): TurnSummary
     hasText: false,
     tokensIn: turn?.tokens_in ?? null,
     tokensOut: turn?.tokens_out ?? null,
+    cacheRead: turn?.cache_read ?? null,
+    cacheWrite: turn?.cache_write ?? null,
     cost: turn?.cost ?? null,
     startedAt: turn?.started_at ?? null,
     endedAt: turn?.ended_at ?? null,

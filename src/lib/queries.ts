@@ -11,6 +11,7 @@ import type {
   SessionCursorRow,
   SessionListItem,
   SessionRow,
+  SessionUsageRow,
   ToolCallDetail,
   ToolCallIndexRow,
   ToolCallRow,
@@ -28,6 +29,7 @@ export type {
   SessionCursorRow,
   SessionListItem,
   SessionRow,
+  SessionUsageRow,
   ToolCallDetail,
   ToolCallIndexRow,
   ToolCallRow,
@@ -199,13 +201,34 @@ export function listTurns(sessionId: string, limit = 200, db: Db = getDb()): Tur
   const rows = db
     .prepare(
       `SELECT id, session_id, run_seq, turn_index, message_entry_id, started_at, ended_at,
-              stop_reason, thinking_level, tokens_in, tokens_out, cost
+              stop_reason, thinking_level, tokens_in, tokens_out, cost,
+              json_extract(assistant_message, '$.usage.cacheRead')  AS cache_read,
+              json_extract(assistant_message, '$.usage.cacheWrite') AS cache_write
          FROM turns WHERE session_id = ?
         ORDER BY run_seq ASC, turn_index ASC
         LIMIT ?`,
     )
     .all(sessionId, limit) as unknown as TurnRow[];
   return rows.map(plain);
+}
+
+/**
+ * 会话级用量汇总（PRD §11.2 / M3-5）：tokens 与成本来自 turns 行，
+ * 缓存读写从助手消息的 usage 里取。回填与实时写入都落在同一批 turns 上，所以口径一致。
+ */
+export function sessionUsage(sessionId: string, db: Db = getDb()): SessionUsageRow {
+  const row = db
+    .prepare(
+      `SELECT
+         COALESCE(SUM(tokens_in), 0)  AS tokens_in,
+         COALESCE(SUM(tokens_out), 0) AS tokens_out,
+         COALESCE(SUM(json_extract(assistant_message, '$.usage.cacheRead')), 0)  AS cache_read,
+         COALESCE(SUM(json_extract(assistant_message, '$.usage.cacheWrite')), 0) AS cache_write,
+         COALESCE(SUM(cost), 0)       AS cost
+       FROM turns WHERE session_id = ?`,
+    )
+    .get(sessionId) as unknown as SessionUsageRow;
+  return plain(row);
 }
 
 export function listToolCalls(sessionId: string, limit = 200, db: Db = getDb()): ToolCallRow[] {

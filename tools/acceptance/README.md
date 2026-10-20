@@ -4,7 +4,7 @@
 
 | 档 | 命令 | 需要什么 | 会不会有副作用 | 覆盖什么 |
 |:--|:--|:--|:--|:--|
-| **A 离线** | `npm run accept` | 什么都不需要（首次会自动 `next build`） | 没有。跑在临时数据目录与空闲端口上 | 建库 → 写入 → 落库 → SSE → 页面 → 回填 → 消息树 → 会话列表 → 对账与状态推进 → 截短重读 → 请求采集 → 请求列表与详情 → 工具列表与详情，共 25 项断言 |
+| **A 离线** | `npm run accept` | 什么都不需要（首次会自动 `next build`） | 没有。跑在临时数据目录与空闲端口上 | 建库 → 写入 → 落库 → SSE → 页面 → 回填 → 消息树 → 会话列表 → 对账与状态推进 → 截短重读 → 请求采集 → 请求列表与详情 → 工具列表与详情 → 用量汇总，共 26 项断言 |
 | **B 真实 Pi** | 见下表 | `pi` 在 PATH 上、真实服务端在跑、会在真实会话里调用模型 | **有**：花 token；其中两条会杀 4173 的监听进程 | PRD §14 里「探针不卡顿 / 强杀恢复 / 读写并发」这些只能在真实会话上量的判据 |
 
 `npm test` 与 `npm run check` 是单元测试与类型/构建检查，不在这里；`npm run verify` =
@@ -12,7 +12,7 @@
 
 ## 档 A：`npm run accept`
 
-25 项检查（A1–A25）。A1–A13 在第一个隔离实例上：
+26 项检查（A1–A26）。A1–A13 在第一个隔离实例上：
 
 健康检查、空库页面、无令牌与错令牌被拒、超大请求体被拒、合法批次落库、重复投递幂等、
 单条超大 payload 被截断打标、写入到可见的延迟、SSE 逐帧推送、会话详情页可打开且含正文、
@@ -49,6 +49,7 @@ A20–A21 同一个隔离实例，覆盖 M2-5 对账与状态推进：
 | A23 | 请求开始 → 响应两次写同一 `(session_id, request_seq)`：payload 里的 `authorization` / `x-api-key` 被脱敏（服务端再脱一次），`payload_bytes` 等于脱敏前原始长度，响应状态码与 headers 落库，时间线出现 `provider_request` / `provider_response` |
 | A24 | 请求列表与详情：列表行不带 payload / headers，token 与成本按 `(run_seq, turn_index)` 从 turns 关联；详情接口给脱敏 payload、响应头与 usage；会话页有「时间线 / 请求」标签并链到详情页；详情页首屏显示脱敏 payload；会话游标接口给出最大 request_seq / run_seq；缺请求 404、非法 seq 400 |
 | A25 | 工具列表与详情：列表行不带完整参数 / 结果，带参数预览、Turn、耗时与成功 / 失败；详情接口给完整参数、最终结果与部分结果；会话页有工具标签并链到详情页；详情页首屏显示参数、Turn 与同 Turn 请求；缺调用 404 |
+| A26 | 用量汇总：会话级输入 / 输出 / 缓存读写 / 成本等于各 Turn 求和；Turn 级缓存读写在接口与页面可见；顶部状态条显示 R / W 与成本 |
 
 隔离靠三件事，所以它**永远不会碰你的真实数据**：
 
@@ -67,7 +68,7 @@ A20–A21 同一个隔离实例，覆盖 M2-5 对账与状态推进：
 | `node tools/acceptance/real-pi/overhead.mjs [轮数]` | PRD §14 M1 第 2 条（偏差 ≤ 10%） | **调用真实模型**（默认 12 次请求） |
 | `zsh tools/acceptance/real-pi/downtime.sh` | PRD §14 M1 第 3 条（强杀恢复） | **调用真实模型**，并**杀掉 4173 的监听进程**后自行重启 |
 | `zsh tools/acceptance/real-pi/hmr.sh` | 技术选型 §14 检查 4（HMR 不锁库） | **杀掉 4173 的监听进程**并改起 `next dev`；临时改 `src/app/page.tsx` 后恢复；跑完 4173 上是 dev，要换回生产服务得手动重启 |
-| `node tools/acceptance/real-pi/tree-compare.mjs [cwd关键字]` | PRD §14 M2 第 1 条（消息数与 Pi 的 `/tree` 一致） | 只读；用 `pi --export` 导出的 `{header, entries, leafId}` 与看板逐条对照。**不调模型** |
+| `node tools/acceptance/real-pi/tree-compare.mjs [cwd关键字]` | PRD §14 M2 第 1 条（消息数与 Pi 的 `/tree` 一致）+ M3-5（用量与 JSONL `usage` 一致） | 只读；用 `pi --export` 导出的 `{header, entries, leafId}` 与看板逐条对照，并从 entries 现算 token / 缓存 / 成本与接口比对。**不调模型** |
 | `node tools/acceptance/real-pi/live-session.mjs ["提示词"]` | PRD §14 M2 第 2 条（写入时读取不失败）+ M2-5 的 settle→idle + M1 第 1 条（事件延迟） | **调用真实模型**（1 轮）；起隔离实例（临时库 + 临时会话目录 + 空闲端口），不碰真实的 `data/` 与 4173 |
 | `node tools/acceptance/real-pi/request-capture.mjs` | PRD §14 M3 前两条 + `request_seq` 跨进程不重置 | **调用真实模型**（2 轮、每次 1 个请求）；起隔离实例，第一次新建会话、第二次 `--resume` 同一个会话文件；断言 payload 脱敏、`payload_bytes` 与探针打印一致、状态码与响应头可见 |
 

@@ -47,6 +47,9 @@ export interface TurnRow {
   thinking_level: string | null;
   tokens_in: number | null;
   tokens_out: number | null;
+  /** 来自助手消息 usage.cacheRead / cacheWrite；旧数据或没有 usage 时为 null */
+  cache_read: number | null;
+  cache_write: number | null;
   cost: number | null;
 }
 
@@ -120,6 +123,15 @@ export interface ProbeStatusRow {
   dropped_count: number;
   queue_depth: number;
   probe_version: string | null;
+}
+
+/** 会话级用汇总（M3-5）：tokens 与成本来自 turns，缓存读写来自助手消息 usage */
+export interface SessionUsageRow {
+  tokens_in: number;
+  tokens_out: number;
+  cache_read: number;
+  cache_write: number;
+  cost: number;
 }
 
 /** 会话已有数据的最大序号；探针在本地游标缺失时用它种子化（schema v3 / M3-3） */
