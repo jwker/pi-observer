@@ -974,7 +974,9 @@ body.modal-open { overflow: hidden; }
 /* 时间线的一行：时间 / 类型 / 内容 / 详情 */
 .entry {
   display: grid;
-  grid-template-columns: 58px 46px minmax(0, 1fr) 18px;
+  /* 操作列在最左：详情按钮和时间共用一个视觉锚点，右侧不再放控件 */
+  /* 操作列放 more 文字按钮；类型列 62px：provider → / provider ← 大写后约 59px */
+  grid-template-columns: 36px 58px 62px minmax(0, 1fr);
   gap: 8px;
   padding: 5px 9px 5px 7px;
   border-left: 2px solid transparent;
@@ -989,18 +991,20 @@ body.modal-open { overflow: hidden; }
 .entry.user .txt, .entry.a .txt { color: var(--fg); }
 .entry .more {
   align-self: start;
-  width: 18px; height: 18px;
-  margin-top: 1px;
-  padding: 0;
+  min-width: 32px; height: 18px;
+  margin-top: 0;
+  padding: 0 4px;
   border: 0;
   border-radius: 3px;
   background: transparent;
   color: var(--fg-3);
   font: inherit;
-  font-size: 13px;
-  line-height: 1;
+  font-size: 9.5px;
+  letter-spacing: .03em;
+  line-height: 18px;
+  text-align: center;
   cursor: pointer;
-  opacity: .3;
+  opacity: .5;
 }
 .entry:hover .more { opacity: 1; }
 .entry .more:hover { background: var(--bg-3); color: var(--fg); }
@@ -1179,7 +1183,8 @@ html[data-theme="light"] .modal-panel { box-shadow: 0 18px 60px rgba(24, 27, 31,
   .tl-top { flex-wrap: wrap; }
   .tl-top span:last-child { display: none; }
   .turn-head .stats span:nth-child(n+3) { display: none; }
-  .entry { grid-template-columns: 46px 42px minmax(0, 1fr) 18px; gap: 6px; }
+  /* 类型列同样要装得下 provider → / provider ←（约 59px） */
+  .entry { grid-template-columns: 34px 44px 60px minmax(0, 1fr); gap: 6px; }
   .statusbar-inner .item:nth-child(n+2),
   .statusbar-inner .spacer { display: none; }
   .modal { padding: 10px; }

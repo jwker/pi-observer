@@ -343,6 +343,13 @@ function TimelineRow({
 
   return (
     <div className={kind.className}>
+      {hasDetail ? (
+        <button className="more" onClick={() => onDetail(row)} title="详情" aria-label="详情">
+          more
+        </button>
+      ) : (
+        <span />
+      )}
       <span className="t">{clockTime(row.at)}</span>
       <span className={`k ${kind.key}`}>{row.label}</span>
       <div className="b">
@@ -415,13 +422,6 @@ function TimelineRow({
           </span>
         ) : null}
       </div>
-      {hasDetail ? (
-        <button className="more" onClick={() => onDetail(row)} title="详情" aria-label="详情">
-          ⋯
-        </button>
-      ) : (
-        <span />
-      )}
     </div>
   );
 }
