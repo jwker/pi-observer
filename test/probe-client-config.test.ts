@@ -16,8 +16,8 @@ const batch: IngestBatch = {
       kind: "event",
       event_id: "e1",
       session_id: "s1",
-      layer: "turn",
-      event_type: "turn_start",
+      layer: "agent",
+      event_type: "agent_start",
       payload: {},
       occurred_at: null,
       run_seq: 1,
@@ -107,25 +107,22 @@ test("checkHealth：可达返回 true，抛错返回 false", async () => {
   );
 });
 
-test("探针配置：默认地址、批量与队列上限、实时正文默认开", () => {
+test("探针配置：默认地址、批量与队列上限", () => {
   const config = loadProbeConfig({});
   assert.equal(config.baseUrl, "http://127.0.0.1:4173");
   assert.equal(config.ingestUrl, "http://127.0.0.1:4173/api/ingest");
   assert.equal(config.batchSize, 50);
-  assert.equal(config.progressIntervalMs, 500);
   assert.equal(config.maxQueueRecords, 2000);
   assert.equal(config.maxQueueBytes, 64 * 1024 * 1024);
   assert.equal(config.maxRecordBytes, 512 * 1024);
-  assert.equal(config.liveText, true);
   assert.equal(config.debugRequests, false);
   assert.ok(config.tokenFile === defaultTokenFile());
   assert.ok(config.tokenFile.endsWith("/data/token"));
 });
 
-test("探针配置：环境变量可覆盖地址、开关与上限", () => {
+test("探针配置：环境变量可覆盖地址与上限", () => {
   const config = loadProbeConfig({
     PI_OBSERVER_URL: "http://127.0.0.1:9999/",
-    PI_OBSERVER_LIVE_TEXT: "0",
     PI_OBSERVER_BATCH_SIZE: "10",
     PI_OBSERVER_TOKEN_FILE: "/tmp/token",
     PI_OBSERVER_MAX_QUEUE_RECORDS: "5",
@@ -133,7 +130,6 @@ test("探针配置：环境变量可覆盖地址、开关与上限", () => {
   });
   assert.equal(config.baseUrl, "http://127.0.0.1:9999");
   assert.equal(config.ingestUrl, "http://127.0.0.1:9999/api/ingest");
-  assert.equal(config.liveText, false);
   assert.equal(config.batchSize, 10);
   assert.equal(config.tokenFile, "/tmp/token");
   assert.equal(config.maxQueueRecords, 5);

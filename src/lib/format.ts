@@ -80,29 +80,3 @@ export function formatBytes(n: number | null | undefined): string {
   return `${(n / 1024 / 1024).toFixed(1)} MB`;
 }
 
-/** 把任意 JSON 压成一行短预览（对象按键值浅展开，数组按项浅展开） */
-export function previewJson(value: unknown, max = 140): string | null {
-  if (value === null || value === undefined) return null;
-
-  let text: string;
-  if (typeof value === "string") text = value;
-  else if (Array.isArray(value)) {
-    const items = value.slice(0, 4).map((item) => (typeof item === "string" ? item : JSON.stringify(item)));
-    text = `[${items.join(", ")}${value.length > 4 ? ", …" : ""}]`;
-  } else if (typeof value === "object") {
-    const entries = Object.entries(value as Record<string, unknown>).slice(0, 5);
-    text = `{ ${entries
-      .map(([key, item]) => `${key}: ${typeof item === "string" ? item : JSON.stringify(item)}`)
-      .join(", ")}${Object.keys(value as Record<string, unknown>).length > 5 ? ", …" : ""} }`;
-  } else {
-    text = String(value);
-  }
-
-  const oneLine = text.replace(/\s+/g, " ").trim();
-  return oneLine.length > max ? `${oneLine.slice(0, max)}…` : oneLine;
-}
-
-/** 计数变化的方向标记，用于「↑ / ↓」 */
-export function numberOrDash(n: number | null | undefined): string {
-  return n === null || n === undefined ? "—" : String(n);
-}

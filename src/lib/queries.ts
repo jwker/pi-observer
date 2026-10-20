@@ -3,7 +3,6 @@ import { localDayStartIso } from "./session-view.ts";
 import type {
   EventRow,
   MessageDetail,
-  MessageIndexRow,
   OverviewStats,
   ProbeStatusRow,
   RequestDetail,
@@ -11,17 +10,16 @@ import type {
   SessionCursorRow,
   SessionListItem,
   SessionRow,
-  SessionUsageRow,
+  SessionStreamData,
+  TimelineMessageRow,
   ToolCallDetail,
   ToolCallIndexRow,
-  ToolCallRow,
   TurnRow,
 } from "./types.ts";
 
 export type {
   EventRow,
   MessageDetail,
-  MessageIndexRow,
   OverviewStats,
   ProbeStatusRow,
   RequestDetail,
@@ -29,15 +27,12 @@ export type {
   SessionCursorRow,
   SessionListItem,
   SessionRow,
-  SessionUsageRow,
+  SessionStreamData,
+  TimelineMessageRow,
   ToolCallDetail,
   ToolCallIndexRow,
-  ToolCallRow,
   TurnRow,
 } from "./types.ts";
-
-/** 树标签只显示前这么多字符；更长的正文在点击节点时按需取（`getMessageDetail`） */
-const SUMMARY_CHARS = 200;
 
 /**
  * `node:sqlite` 返回的是 null 原型对象。React 把这类对象从服务端组件传给客户端组件时会直接
@@ -52,7 +47,8 @@ export function listSessions(db: Db = getDb(), limit = 200): SessionRow[] {
   const rows = db
     .prepare(
       `SELECT session_id, cwd, file_path, parent_session, name, started_at, last_activity_at,
-              message_count, turn_count, tool_call_count, tokens_in, tokens_out, cost,
+              message_count, turn_count, tool_call_count, tokens_in, tokens_out,
+              cache_read, cache_write, cost,
               state, source, last_reconciled_at
          FROM sessions
         ORDER BY COALESCE(last_activity_at, started_at, '') DESC
@@ -145,7 +141,8 @@ export function getSession(sessionId: string, db: Db = getDb()): SessionRow | nu
   const row = db
     .prepare(
       `SELECT session_id, cwd, file_path, parent_session, name, started_at, last_activity_at,
-              message_count, turn_count, tool_call_count, tokens_in, tokens_out, cost,
+              message_count, turn_count, tool_call_count, tokens_in, tokens_out,
+              cache_read, cache_write, cost,
               state, source, last_reconciled_at
          FROM sessions WHERE session_id = ?`,
     )
@@ -159,6 +156,8 @@ export interface EventQuery {
   eventType?: string;
   /** 只看这条 id 之后的事件，供实时增量拉取 */
   afterId?: number;
+  /** 默认按 id 升序；时间线取最近事件时用 `desc`，再按 id 降序取满 */
+  order?: "asc" | "desc";
 }
 
 export function listEvents(sessionId: string, query: EventQuery = {}, db: Db = getDb()): EventRow[] {
@@ -184,7 +183,7 @@ export function listEvents(sessionId: string, query: EventQuery = {}, db: Db = g
       `SELECT id, event_id, session_id, layer, event_type, run_seq, turn_index, payload, occurred_at, received_at
          FROM events
         WHERE ${clauses.join(" AND ")}
-        ORDER BY id ASC
+        ORDER BY id ${query.order === "desc" ? "DESC" : "ASC"}
         LIMIT ?`,
     )
     .all(...(params as never[])) as unknown as Array<Omit<EventRow, "payload"> & { payload: string | null }>;
@@ -202,8 +201,8 @@ export function listTurns(sessionId: string, limit = 200, db: Db = getDb()): Tur
     .prepare(
       `SELECT id, session_id, run_seq, turn_index, message_entry_id, started_at, ended_at,
               stop_reason, thinking_level, tokens_in, tokens_out, cost,
-              json_extract(assistant_message, '$.usage.cacheRead')  AS cache_read,
-              json_extract(assistant_message, '$.usage.cacheWrite') AS cache_write
+              COALESCE(cache_read, json_extract(assistant_message, '$.usage.cacheRead'))   AS cache_read,
+              COALESCE(cache_write, json_extract(assistant_message, '$.usage.cacheWrite')) AS cache_write
          FROM turns WHERE session_id = ?
         ORDER BY run_seq ASC, turn_index ASC
         LIMIT ?`,
@@ -212,48 +211,40 @@ export function listTurns(sessionId: string, limit = 200, db: Db = getDb()): Tur
   return rows.map(plain);
 }
 
-/**
- * 会话级用量汇总（PRD §11.2 / M3-5）：tokens 与成本来自 turns 行，
- * 缓存读写从助手消息的 usage 里取。回填与实时写入都落在同一批 turns 上，所以口径一致。
- */
-export function sessionUsage(sessionId: string, db: Db = getDb()): SessionUsageRow {
-  const row = db
-    .prepare(
-      `SELECT
-         COALESCE(SUM(tokens_in), 0)  AS tokens_in,
-         COALESCE(SUM(tokens_out), 0) AS tokens_out,
-         COALESCE(SUM(json_extract(assistant_message, '$.usage.cacheRead')), 0)  AS cache_read,
-         COALESCE(SUM(json_extract(assistant_message, '$.usage.cacheWrite')), 0) AS cache_write,
-         COALESCE(SUM(cost), 0)       AS cost
-       FROM turns WHERE session_id = ?`,
-    )
-    .get(sessionId) as unknown as SessionUsageRow;
-  return plain(row);
-}
-
-export function listToolCalls(sessionId: string, limit = 200, db: Db = getDb()): ToolCallRow[] {
-  const rows = db
-    .prepare(
-      `SELECT tool_call_id, session_id, tool_name, is_error, duration_ms, started_at, ended_at
-         FROM tool_calls WHERE session_id = ?
-        ORDER BY COALESCE(started_at, '') ASC
-        LIMIT ?`,
-    )
-    .all(sessionId, limit) as unknown as ToolCallRow[];
-  return rows.map(plain);
-}
-
-/** 工具列表（PRD §11.2 视图三 / M3-4）：不带完整 args / result，只带字节数与参数预览 */
+/** 工具列表（PRD §11.2 视图三 / M3-4）：参数 / 结果按条目引用 join messages，只带字节数与参数预览 */
 export function listToolCallIndex(sessionId: string, limit = 500, db: Db = getDb()): ToolCallIndexRow[] {
   const rows = db
     .prepare(
-      `SELECT tool_call_id, session_id, parent_tool_call_id, tool_name, is_error, duration_ms,
-              started_at, ended_at, run_seq, turn_index,
-              COALESCE(LENGTH(args), 0) AS args_bytes,
-              COALESCE(LENGTH(result), 0) AS result_bytes,
-              COALESCE(LENGTH(partial_result), 0) AS partial_bytes,
-              substr(args, 1, 500) AS args_preview
-         FROM tool_calls WHERE session_id = ?
+      `WITH resolved AS (
+         SELECT tc.*,
+                COALESCE(
+                  (SELECT json_extract(j.value, '$.arguments')
+                     FROM messages m, json_each(m.payload, '$.message.content') j
+                    WHERE m.session_id = tc.session_id
+                      AND m.entry_id = tc.entry_id
+                      AND json_extract(j.value, '$.type') = 'toolCall'
+                      AND json_extract(j.value, '$.id') = tc.tool_call_id
+                    LIMIT 1),
+                  tc.args
+                ) AS args_json,
+                COALESCE(
+                  (SELECT json_extract(m2.payload, '$.message')
+                     FROM messages m2
+                    WHERE m2.session_id = tc.session_id
+                      AND m2.entry_id = tc.result_entry_id),
+                  tc.result
+                ) AS result_json
+           FROM tool_calls tc
+          WHERE tc.session_id = ?
+       )
+       SELECT tool_call_id, session_id, parent_tool_call_id, tool_name, is_error, duration_ms,
+              started_at, ended_at, run_seq, turn_index, entry_id, result_entry_id,
+              COALESCE(LENGTH(CAST(args_json AS TEXT)), 0) AS args_bytes,
+              COALESCE(LENGTH(CAST(result_json AS TEXT)), 0) AS result_bytes,
+              substr(CAST(args_json AS TEXT), 1, 500) AS args_preview,
+              CASE WHEN json_valid(result_json)
+                   THEN substr(json_extract(result_json, '$.content[0].text'), 1, 500) END AS result_preview
+         FROM resolved
         ORDER BY COALESCE(started_at, '') ASC
         LIMIT ?`,
     )
@@ -266,24 +257,46 @@ export function countToolCalls(sessionId: string, db: Db = getDb()): number {
   return row.n;
 }
 
-/** 单条工具调用详情（点击列表时进详情页，按需取完整参数、结果与部分结果） */
+/** 单条工具调用详情（点击列表时进详情页，按需取完整参数与结果） */
 export function getToolCallDetail(sessionId: string, toolCallId: string, db: Db = getDb()): ToolCallDetail | null {
   const row = db
     .prepare(
-      `SELECT tool_call_id, session_id, parent_tool_call_id, tool_name, is_error, duration_ms,
-              started_at, ended_at, run_seq, turn_index,
-              COALESCE(LENGTH(args), 0) AS args_bytes,
-              COALESCE(LENGTH(result), 0) AS result_bytes,
-              COALESCE(LENGTH(partial_result), 0) AS partial_bytes,
-              substr(args, 1, 500) AS args_preview,
-              args, result, partial_result
-         FROM tool_calls WHERE session_id = ? AND tool_call_id = ?`,
+      `WITH resolved AS (
+         SELECT tc.*,
+                COALESCE(
+                  (SELECT json_extract(j.value, '$.arguments')
+                     FROM messages m, json_each(m.payload, '$.message.content') j
+                    WHERE m.session_id = tc.session_id
+                      AND m.entry_id = tc.entry_id
+                      AND json_extract(j.value, '$.type') = 'toolCall'
+                      AND json_extract(j.value, '$.id') = tc.tool_call_id
+                    LIMIT 1),
+                  tc.args
+                ) AS args_json,
+                COALESCE(
+                  (SELECT json_extract(m2.payload, '$.message')
+                     FROM messages m2
+                    WHERE m2.session_id = tc.session_id
+                      AND m2.entry_id = tc.result_entry_id),
+                  tc.result
+                ) AS result_json
+           FROM tool_calls tc
+          WHERE tc.session_id = ? AND tc.tool_call_id = ?
+       )
+       SELECT tool_call_id, session_id, parent_tool_call_id, tool_name, is_error, duration_ms,
+              started_at, ended_at, run_seq, turn_index, entry_id, result_entry_id,
+              COALESCE(LENGTH(CAST(args_json AS TEXT)), 0) AS args_bytes,
+              COALESCE(LENGTH(CAST(result_json AS TEXT)), 0) AS result_bytes,
+              substr(CAST(args_json AS TEXT), 1, 500) AS args_preview,
+              CASE WHEN json_valid(result_json)
+                   THEN substr(json_extract(result_json, '$.content[0].text'), 1, 500) END AS result_preview,
+              args_json AS args, result_json AS result
+         FROM resolved`,
     )
     .get(sessionId, toolCallId) as
-    | (Omit<ToolCallDetail, "args" | "result" | "partial_result"> & {
+    | (Omit<ToolCallDetail, "args" | "result"> & {
         args: string | null;
         result: string | null;
-        partial_result: string | null;
       })
     | undefined;
   if (row === undefined) return null;
@@ -291,7 +304,6 @@ export function getToolCallDetail(sessionId: string, toolCallId: string, db: Db 
     ...row,
     args: row.args === null ? null : safeParse(row.args),
     result: row.result === null ? null : safeParse(row.result),
-    partial_result: row.partial_result === null ? null : safeParse(row.partial_result),
   }) as ToolCallDetail;
 }
 
@@ -339,7 +351,9 @@ export function getRequestDetail(sessionId: string, requestSeq: number, db: Db =
               COALESCE(LENGTH(r.response_headers), 0) AS response_headers_bytes,
               t.tokens_in, t.tokens_out, t.cost,
               t.started_at AS turn_started_at, t.ended_at AS turn_ended_at,
-              t.stop_reason AS turn_stop_reason, t.assistant_message AS turn_assistant_message
+              t.stop_reason AS turn_stop_reason,
+              COALESCE(json_extract(tm.payload, '$.message.usage'),
+                       json_extract(t.assistant_message, '$.usage')) AS turn_usage_json
          FROM llm_requests r
          LEFT JOIN turns t
            ON t.id = (
@@ -347,25 +361,21 @@ export function getRequestDetail(sessionId: string, requestSeq: number, db: Db =
                  WHERE t2.session_id = r.session_id AND t2.run_seq = r.run_seq AND t2.turn_index = r.turn_index
                  ORDER BY t2.id DESC LIMIT 1
               )
+         LEFT JOIN messages tm
+           ON tm.session_id = t.session_id AND tm.entry_id = t.message_entry_id
         WHERE r.session_id = ? AND r.request_seq = ?`,
     )
     .get(sessionId, requestSeq) as
     | (Omit<RequestDetail, "payload" | "response_headers" | "turn_usage"> & {
         payload: string | null;
         response_headers: string | null;
-        turn_assistant_message: string | null;
+        turn_usage_json: string | null;
       })
     | undefined;
   if (row === undefined) return null;
 
-  const assistant = row.turn_assistant_message === null ? null : safeParse(row.turn_assistant_message);
-  const usage =
-    typeof assistant === "object" && assistant !== null && "usage" in assistant
-      ? (assistant as { usage?: unknown }).usage ?? null
-      : null;
-
-  // `turn_assistant_message` 只用来取 usage，不往页面传（整条助手消息可能很大）
-  const { turn_assistant_message: _assistantMessage, ...rest } = row;
+  const usage = row.turn_usage_json === null ? null : safeParse(row.turn_usage_json);
+  const { turn_usage_json: _usageJson, ...rest } = row;
   return plain({
     ...rest,
     payload: row.payload === null ? null : safeParse(row.payload),
@@ -378,21 +388,7 @@ export function getRequestDetail(sessionId: string, requestSeq: number, db: Db =
  * 消息树的条目索引（PRD §11.2）：不带 payload，`text` 也截到 200 字符。
  * 一个会话可能有很多条目，整页塞进 payload 会让首屏变得很大；全文点击时再取。
  */
-export function listMessageIndex(sessionId: string, limit = 5000, db: Db = getDb()): MessageIndexRow[] {
-  const rows = db
-    .prepare(
-      `SELECT entry_id, parent_id, kind, role, timestamp, entry_index,
-              substr(text, 1, ${SUMMARY_CHARS}) AS summary,
-              COALESCE(LENGTH(payload), 0) AS payload_bytes
-         FROM messages WHERE session_id = ?
-        ORDER BY entry_index ASC
-        LIMIT ?`,
-    )
-    .all(sessionId, limit) as unknown as MessageIndexRow[];
-  return rows.map(plain);
-}
-
-/** 会话在库里的条目总数，用于如实说明树有没有被 `limit` 截断 */
+/** 会话在库里的条目总数，用于如实说明时间线有没有被 `limit` 截断 */
 export function countMessages(sessionId: string, db: Db = getDb()): number {
   const row = db.prepare("SELECT COUNT(*) AS n FROM messages WHERE session_id = ?").get(sessionId) as { n: number };
   return row.n;
@@ -402,7 +398,7 @@ export function countMessages(sessionId: string, db: Db = getDb()): number {
 export function getMessageDetail(sessionId: string, entryId: string, db: Db = getDb()): MessageDetail | null {
   const row = db
     .prepare(
-      `SELECT entry_id, kind, role, timestamp, entry_index, text,
+      `SELECT entry_id, parent_id, kind, role, timestamp, entry_index, text,
               COALESCE(LENGTH(payload), 0) AS payload_bytes, payload
          FROM messages WHERE session_id = ? AND entry_id = ?`,
     )
@@ -412,6 +408,196 @@ export function getMessageDetail(sessionId: string, entryId: string, db: Db = ge
     ...row,
     payload: row.payload === null ? null : safeParse(row.payload),
   });
+}
+
+/**
+ * 时间线条目（R2）：比消息树索引多带正文与思考摘要，但仍不带完整 payload。
+ *
+ * `thinking` 只取第一条 thinking 部分并截到 2 KB：时间线默认折叠思考，够显示摘要；
+ * 完整思考在行详情里看原始 payload。`json_valid` 兜底截断过的 payload，避免 SQL 报错。
+ */
+export function listTimelineMessages(
+  sessionId: string,
+  limit = 20000,
+  db: Db = getDb(),
+): TimelineMessageRow[] {
+  const rows = db
+    .prepare(
+      `SELECT m.entry_id, m.parent_id, m.kind, m.role, m.timestamp, m.entry_index, m.text,
+              (SELECT substr(json_extract(j.value, '$.thinking'), 1, 2000)
+                 FROM json_each(CASE WHEN json_valid(m.payload)
+                                      AND json_type(m.payload, '$.message.content') = 'array'
+                                     THEN m.payload ELSE '{}' END,
+                                '$.message.content') j
+                WHERE json_extract(j.value, '$.type') = 'thinking'
+                LIMIT 1) AS thinking,
+              COALESCE(LENGTH(m.payload), 0) AS payload_bytes
+         FROM messages m
+        WHERE m.session_id = ?
+        ORDER BY m.entry_index ASC
+        LIMIT ?`,
+    )
+    .all(sessionId, limit) as unknown as TimelineMessageRow[];
+  return rows.map(plain);
+}
+
+export function countTurns(sessionId: string, db: Db = getDb()): number {
+  const row = db.prepare("SELECT COUNT(*) AS n FROM turns WHERE session_id = ?").get(sessionId) as { n: number };
+  return row.n;
+}
+
+export function countEvents(sessionId: string, db: Db = getDb()): number {
+  const row = db.prepare("SELECT COUNT(*) AS n FROM events WHERE session_id = ?").get(sessionId) as { n: number };
+  return row.n;
+}
+
+/** 单条事件（行详情弹窗用）；payload 已解析 */
+export function getEventDetail(sessionId: string, eventId: string, db: Db = getDb()): EventRow | null {
+  const row = db
+    .prepare(
+      `SELECT id, event_id, session_id, layer, event_type, run_seq, turn_index, payload, occurred_at, received_at
+         FROM events WHERE session_id = ? AND event_id = ?`,
+    )
+    .get(sessionId, eventId) as unknown as (Omit<EventRow, "payload"> & { payload: string | null }) | undefined;
+  if (row === undefined) return null;
+  return plain({
+    ...row,
+    payload: row.payload === null ? null : safeParse(row.payload),
+  }) as EventRow;
+}
+
+/**
+ * 单页时间线一次取全（R2）：消息条目、Turn 元数据、事件、工具、请求索引。
+ * 请求只取索引，不带 payload / headers；行详情弹窗再用 `getRequestDetail`。
+ *
+ * 数组有条数上限，`totals` 是库里的真实行数：调用方发现长度小于总数时要如实说明截断。
+ * 本机单用户、最大会话约几百条，上限只是防御，正常不会触发。
+ */
+/**
+ * 单页每秒轮询用的轻量版本号（R3）。
+ *
+ * 活跃会话每秒可能只多几条条目；每秒把整套 `sessionStreamData` 序列化一遍太浪费。
+ * 这里只聚合计数、最大序号、字节数、状态与最后时间，拼成一个短字符串：
+ * 与上一次相同就返回 `unchanged`，页面不做任何渲染。它不要求严格单调，只要求
+ * 「库里的可见数据变了，字符串就一定变」——所以时间字段和聚合值都放进去。
+ */
+export function streamVersion(sessionId: string, db: Db = getDb()): string | null {
+  const session = db
+    .prepare(
+      `SELECT state, source, COALESCE(last_activity_at, '') AS last_activity_at,
+              COALESCE(last_reconciled_at, '') AS last_reconciled_at,
+              message_count, turn_count, tool_call_count, tokens_in, tokens_out, cost
+         FROM sessions WHERE session_id = ?`,
+    )
+    .get(sessionId) as
+    | {
+        state: string;
+        source: string;
+        last_activity_at: string;
+        last_reconciled_at: string;
+        message_count: number;
+        turn_count: number;
+        tool_call_count: number;
+        tokens_in: number;
+        tokens_out: number;
+        cost: number;
+      }
+    | undefined;
+  if (session === undefined) return null;
+
+  const row = db
+    .prepare(
+      `SELECT
+         (SELECT COUNT(*) FROM messages WHERE session_id = ?)                          AS messages,
+         (SELECT COALESCE(MAX(entry_index), -1) FROM messages WHERE session_id = ?)    AS message_index,
+         (SELECT COALESCE(SUM(LENGTH(payload)), 0) FROM messages WHERE session_id = ?) AS message_bytes,
+         (SELECT COUNT(*) FROM events WHERE session_id = ?)                            AS events,
+         (SELECT COALESCE(MAX(id), 0) FROM events WHERE session_id = ?)                AS event_id,
+         (SELECT COUNT(*) FROM turns WHERE session_id = ?)                             AS turns,
+         (SELECT COALESCE(MAX(id), 0) FROM turns WHERE session_id = ?)                 AS turn_id,
+         (SELECT COALESCE(SUM(COALESCE(tokens_in, 0) + COALESCE(tokens_out, 0) + COALESCE(cost, 0)), 0)
+            FROM turns WHERE session_id = ?)                                           AS turn_usage,
+         (SELECT COALESCE(MAX(ended_at), '') FROM turns WHERE session_id = ?)           AS turn_ended,
+         (SELECT COUNT(*) FROM tool_calls WHERE session_id = ?)                        AS tools,
+         (SELECT COALESCE(SUM(is_error), 0) FROM tool_calls WHERE session_id = ?)      AS tool_errors,
+         (SELECT COALESCE(SUM(COALESCE(duration_ms, 0)), 0) FROM tool_calls WHERE session_id = ?) AS tool_ms,
+         (SELECT COALESCE(MAX(ended_at), '') FROM tool_calls WHERE session_id = ?)      AS tool_ended,
+         (SELECT COUNT(*) FROM llm_requests WHERE session_id = ?)                      AS requests,
+         (SELECT COALESCE(MAX(id), 0) FROM llm_requests WHERE session_id = ?)          AS request_id,
+         (SELECT COALESCE(SUM(COALESCE(status, 0)), 0) FROM llm_requests WHERE session_id = ?) AS request_status,
+         (SELECT COALESCE(SUM(COALESCE(LENGTH(response_headers), 0)), 0)
+            FROM llm_requests WHERE session_id = ?)                                    AS request_headers`,
+    )
+    .get(
+      sessionId,
+      sessionId,
+      sessionId,
+      sessionId,
+      sessionId,
+      sessionId,
+      sessionId,
+      sessionId,
+      sessionId,
+      sessionId,
+      sessionId,
+      sessionId,
+      sessionId,
+      sessionId,
+      sessionId,
+      sessionId,
+      sessionId,
+    ) as Record<string, number>;
+
+  return [
+    session.state,
+    session.source,
+    session.last_activity_at,
+    session.last_reconciled_at,
+    session.message_count,
+    session.turn_count,
+    session.tool_call_count,
+    session.tokens_in,
+    session.tokens_out,
+    session.cost,
+    row.messages,
+    row.message_index,
+    row.message_bytes,
+    row.events,
+    row.event_id,
+    row.turns,
+    row.turn_id,
+    row.turn_usage,
+    row.turn_ended,
+    row.tools,
+    row.tool_errors,
+    row.tool_ms,
+    row.tool_ended,
+    row.requests,
+    row.request_id,
+    row.request_status,
+    row.request_headers,
+  ].join("|");
+}
+
+export function sessionStreamData(sessionId: string, db: Db = getDb()): SessionStreamData | null {
+  const session = getSession(sessionId, db);
+  if (session === null) return null;
+
+  return {
+    session,
+    messages: listTimelineMessages(sessionId, 20000, db),
+    turns: listTurns(sessionId, 5000, db),
+    events: listEvents(sessionId, { limit: 2000, order: "desc" }, db),
+    tools: listToolCallIndex(sessionId, 5000, db),
+    requests: listRequests(sessionId, 2000, db),
+    totals: {
+      messages: countMessages(sessionId, db),
+      turns: countTurns(sessionId, db),
+      events: countEvents(sessionId, db),
+      tools: countToolCalls(sessionId, db),
+      requests: countRequests(sessionId, db),
+    },
+  };
 }
 
 export function probeStatus(db: Db = getDb()): ProbeStatusRow | null {

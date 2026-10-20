@@ -12,7 +12,7 @@ import test from "node:test";
 import { createBackfillContext, type BackfillContext } from "../src/lib/backfill.ts";
 import { type Db, openDb } from "../src/lib/db.ts";
 import { applyBatch } from "../src/lib/ingest.ts";
-import type { EventLayer, IngestRecord } from "../src/lib/protocol.ts";
+import { PROBE_PROTOCOL_VERSION, type EventLayer, type IngestRecord } from "../src/lib/protocol.ts";
 import {
   RECONCILE_DELAY_MS,
   afterIngest,
@@ -130,7 +130,7 @@ test("从一批记录里认出「跑完了」与「关掉了」的会话", () =>
   const records: IngestRecord[] = [
     eventOf("a", "agent", "agent_start"),
     eventOf("a", "agent", "agent_settled"),
-    eventOf("a", "turn", "turn_end"),
+    eventOf("a", "tool", "tool_execution_end"),
     eventOf("b", "session", "session_shutdown"),
     eventOf("a", "agent", "agent_settled"), // 同一会话重复出现只算一次
     {
@@ -157,7 +157,7 @@ test("对账：读文件、补条目、记 last_reconciled_at，live 变 merged"
   const f = fixture();
   try {
     applyBatch({
-      protocol: 2,
+      protocol: PROBE_PROTOCOL_VERSION,
       probe_version: "0.1.0",
       dropped_count: 0,
       queue_depth: 0,
@@ -206,7 +206,7 @@ test("对账：只补新增的条目（一遍跑完文件又长了一条）", ()
   const f = fixture();
   try {
     applyBatch({
-      protocol: 2,
+      protocol: PROBE_PROTOCOL_VERSION,
       probe_version: "0.1.0",
       dropped_count: 0,
       queue_depth: 0,
@@ -244,7 +244,7 @@ test("对账：没有会话文件时如实返回 found=false，不写核对时�
   const f = fixture();
   try {
     applyBatch({
-      protocol: 2,
+      protocol: PROBE_PROTOCOL_VERSION,
       probe_version: "0.1.0",
       dropped_count: 0,
       queue_depth: 0,
@@ -269,7 +269,7 @@ test("ingest 之后：关闭的会话标 ended，跑完与关闭的都安排对�
   try {
     applyBatch(
       {
-        protocol: 2,
+        protocol: PROBE_PROTOCOL_VERSION,
         probe_version: "0.1.0",
         dropped_count: 0,
         queue_depth: 0,
@@ -320,7 +320,7 @@ test("状态推进：session_shutdown 把会话标成 ended，幂等且不影响
   const f = fixture();
   try {
     applyBatch({
-      protocol: 2,
+      protocol: PROBE_PROTOCOL_VERSION,
       probe_version: "0.1.0",
       dropped_count: 0,
       queue_depth: 0,

@@ -12,9 +12,10 @@ export async function register(): Promise<void> {
   if (process.env.NEXT_RUNTIME !== "nodejs") return;
   if (process.env.NEXT_PHASE === "phase-production-build") return;
 
-  const [{ createBackfillContext, scanSessionsDir }, { log }] = await Promise.all([
+  const [{ createBackfillContext, scanSessionsDir }, { log }, { startSessionSync }] = await Promise.all([
     import("./lib/backfill.ts"),
     import("./lib/log.ts"),
+    import("./lib/session-sync.ts"),
   ]);
 
   try {
@@ -34,4 +35,7 @@ export async function register(): Promise<void> {
     // 扫不动不能拖垮服务：页面里的补读与实时探针都不依赖它
     log("error", "backfill", "启动扫描失败", { error: (error as Error).message });
   }
+
+  // 启动扫描之后开始每秒跟进活跃会话；已有循环时是幂等的。
+  startSessionSync();
 }

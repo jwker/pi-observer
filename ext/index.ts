@@ -1,7 +1,8 @@
 /**
  * pi-observer 探针（Pi 扩展）。
  *
- * 只做三件事：订阅通知型事件、就地合并高频流、批量推到看板服务。
+ * 只做两件事：订阅通知型事件、批量推到看板服务。消息正文不经过探针——
+ * 服务端每秒读一次活跃会话的 JSONL，settle 后再对账一次（PRD §9.1）。
  * 只读约束（PRD §7.2）：所有 handler 返回 `undefined`，全部包在 try/catch 里，
  * 不调用任何写入 API，不修改 event 对象。
  *
@@ -26,8 +27,8 @@ import {
 import { checkHealth, getSessionCursor } from "./client.ts";
 import { loadProbeConfig, type ProbeConfig } from "./config.ts";
 import { createFlusher, type Flusher } from "./flush.ts";
-import { capText, capValue } from "./limit.ts";
-import { MergeTable, assistantLike, extractParts } from "./merge.ts";
+import { capValue } from "./limit.ts";
+import { assistantLike } from "./assistant.ts";
 import { BoundedQueue } from "./queue.ts";
 import { RequestTracker } from "./request.ts";
 import { sessionCursorStore } from "./session-cursor.ts";
@@ -45,7 +46,6 @@ interface ProbeState {
   session: SessionInfo | null;
   queue: BoundedQueue<IngestRecord>;
   flusher: Flusher;
-  merge: MergeTable;
   /** 请求序号 + 请求/响应对应；每个会话一个 */
   requests: RequestTracker;
   /** 把本轮运行序号写进会话游标（跨 Pi 进程不重置） */
@@ -56,7 +56,6 @@ interface ProbeState {
   turnIndex: number;
   turnStartedAt: string | null;
   batchTimer: ReturnType<typeof setInterval> | null;
-  progressTimer: ReturnType<typeof setInterval> | null;
   /** 被服务端拒绝而丢掉的条数，计入上报的 dropped_count */
   rejectedByServer: number;
   lastActivity: string;
@@ -219,15 +218,6 @@ function startTimers(s: ProbeState): void {
   stopTimers(s);
   s.batchTimer = setInterval(() => void flush(s), s.config.batchIntervalMs);
   s.batchTimer.unref?.();
-
-  if (s.config.liveText) {
-    s.progressTimer = setInterval(() => {
-      for (const record of s.merge.drainProgress()) emit(s, record);
-      for (const record of s.merge.drainToolPartials()) emit(s, record);
-      void flush(s);
-    }, s.config.progressIntervalMs);
-    s.progressTimer.unref?.();
-  }
 }
 
 /**
@@ -252,10 +242,6 @@ function stopTimers(s: ProbeState): void {
   if (s.batchTimer) {
     clearInterval(s.batchTimer);
     s.batchTimer = null;
-  }
-  if (s.progressTimer) {
-    clearInterval(s.progressTimer);
-    s.progressTimer = null;
   }
 }
 
@@ -330,7 +316,6 @@ export default function probe(pi: ExtensionAPI): void {
           maxBatchBytes: config.maxBatchBytes,
           log: (message) => console.error(`[pi-observer] ${message}`),
         }),
-        merge: new MergeTable(),
         requests,
         persistRunSeq: (seq) => {
           cursor.runSeq = seq;
@@ -342,7 +327,6 @@ export default function probe(pi: ExtensionAPI): void {
         turnIndex: 0,
         turnStartedAt: null,
         batchTimer: null,
-        progressTimer: null,
         rejectedByServer: 0,
         lastActivity: nowIso(),
       };
@@ -355,7 +339,6 @@ export default function probe(pi: ExtensionAPI): void {
         filePath: session.filePath,
         version: session.version,
         probeVersion: PROBE_VERSION,
-        liveText: config.liveText,
       }, { runSeq: null, turnIndex: null });
       pushSession(state, "idle");
       startTimers(state);
@@ -459,15 +442,13 @@ export default function probe(pi: ExtensionAPI): void {
     }),
   );
 
+  // turn_start / turn_end 不再产生事件：Turn 的边界与内容都由会话文件（turns + messages）提供。
+  // 这两个钩子只用来记录当前 Turn 序号与开始时间，供工具、请求记录与 turns 行关联。
   pi.on("turn_start", (event) =>
     safe("turn_start", () => {
       if (!state) return;
       state.turnIndex = event.turnIndex;
       state.turnStartedAt = nowIso();
-      pushEvent(state, "turn", "turn_start", { turnIndex: event.turnIndex, timestamp: event.timestamp }, {
-        runSeq: state.runSeq,
-        turnIndex: event.turnIndex,
-      });
     }),
   );
 
@@ -477,23 +458,8 @@ export default function probe(pi: ExtensionAPI): void {
       if (!s?.session) return;
 
       const turnIndex = typeof event.turnIndex === "number" ? event.turnIndex : s.turnIndex;
-      const snapshot = s.merge.consumeMessage(s.runSeq, turnIndex);
       const assistant = assistantLike(event.message);
-      const parts = extractParts(assistant?.content);
-      const text = parts.text !== "" ? parts.text : (snapshot?.text ?? "");
-      const toolResults = Array.isArray(event.toolResults) ? event.toolResults : [];
       const usage = assistant?.usage;
-      const max = s.config.maxRecordBytes;
-
-      pushEvent(s, "turn", "turn_end", {
-        turnIndex,
-        messageEntryId: event.messageEntryId,
-        toolResultEntryIds: event.toolResultEntryIds ?? [],
-        updateCount: snapshot?.updateCount ?? 0,
-        stopReason: assistant?.stopReason ?? null,
-        thinking: capText(parts.thinking, Math.floor(max / 4)),
-        text: capText(text, max),
-      }, { runSeq: s.runSeq, turnIndex });
 
       const record: TurnRecord = {
         kind: "turn",
@@ -501,23 +467,14 @@ export default function probe(pi: ExtensionAPI): void {
         run_seq: s.runSeq,
         turn_index: turnIndex,
         message_entry_id: event.messageEntryId,
-        started_at: s.turnStartedAt ?? snapshot?.startedAt ?? null,
+        started_at: s.turnStartedAt,
         ended_at: nowIso(),
         stop_reason: typeof assistant?.stopReason === "string" ? assistant.stopReason : null,
         thinking_level: typeof assistant?.thinkingLevel === "string" ? assistant.thinkingLevel : null,
-        assistant_message: capValue(assistant ?? { role: "assistant", text }, max).value,
-        tool_results: capValue(
-          toolResults.map((result) => {
-            const item = result as { toolCallId?: unknown; isError?: unknown };
-            return {
-              toolCallId: typeof item.toolCallId === "string" ? item.toolCallId : null,
-              isError: item.isError === true,
-            };
-          }),
-          max,
-        ).value,
         tokens_in: typeof usage?.input === "number" ? usage.input : null,
         tokens_out: typeof usage?.output === "number" ? usage.output : null,
+        cache_read: typeof usage?.cacheRead === "number" ? usage.cacheRead : null,
+        cache_write: typeof usage?.cacheWrite === "number" ? usage.cacheWrite : null,
         cost: typeof usage?.cost?.total === "number" ? usage.cost.total : null,
       };
 
@@ -526,41 +483,15 @@ export default function probe(pi: ExtensionAPI): void {
     }),
   );
 
-  pi.on("message_start", (event) =>
-    safe("message_start", () => {
-      const s = state;
-      if (!s?.session) return;
-      const assistant = assistantLike(event.message);
-      if (s.config.liveText && assistant) {
-        s.merge.noteMessage(s.session.sessionId, s.runSeq, s.turnIndex, event.message, nowIso());
-      }
-      pushEvent(s, "message", "message_start", {
-        role: assistant ? "assistant" : (event.message as { role?: unknown })?.role ?? "unknown",
-        turnIndex: s.turnIndex,
-      }, { runSeq: s.runSeq, turnIndex: s.turnIndex });
-    }),
-  );
-
-  pi.on("message_update", (event) =>
-    safe("message_update", () => {
-      const s = state;
-      if (!s?.session) return;
-      if (!s.config.liveText) return; // 开关关闭：只处理 message_start 与 turn_end（PRD §7.3）
-      const assistant = assistantLike(event.message);
-      if (!assistant) return;
-      s.merge.noteMessage(s.session.sessionId, s.runSeq, s.turnIndex, event.message, nowIso());
-    }),
-  );
-
   pi.on("tool_execution_start", (event) =>
     safe("tool_execution_start", () => {
       const s = state;
       if (!s?.session) return;
       const startedAt = nowIso();
+      // 事件只留操作信息（哪个工具、属于哪次调用）；参数在会话文件里，不随事件传。
       pushEvent(s, "tool", "tool_execution_start", {
         toolCallId: event.toolCallId,
         toolName: event.toolName,
-        args: capValue(event.args, Math.floor(s.config.maxRecordBytes / 4)).value,
         parentToolCallId: event.parentToolCallId ?? null,
       }, { runSeq: s.runSeq, turnIndex: s.turnIndex });
       emit(s, {
@@ -569,40 +500,24 @@ export default function probe(pi: ExtensionAPI): void {
         session_id: s.session.sessionId,
         parent_tool_call_id: event.parentToolCallId ?? null,
         tool_name: event.toolName,
-        args: capValue(event.args, s.config.maxRecordBytes).value,
-        result: null,
-        partial_result: null,
         is_error: false,
         duration_ms: null,
         started_at: startedAt,
         ended_at: null,
         run_seq: s.runStartedAt ? s.runSeq : null,
         turn_index: s.turnStartedAt ? s.turnIndex : null,
+        entry_id: null,
+        result_entry_id: null,
       });
     }),
   );
 
-  pi.on("tool_execution_update", (event) =>
-    safe("tool_execution_update", () => {
-      const s = state;
-      if (!s?.session) return;
-      if (!s.config.liveText) return;
-      s.merge.noteToolPartial(
-        event.toolCallId,
-        s.session.sessionId,
-        event.toolName,
-        capValue(event.partialResult, Math.floor(s.config.maxRecordBytes / 4)).value,
-        nowIso(),
-      );
-    }),
-  );
+  // tool_execution_update 不再订阅：部分结果属于流式内容，正文与最终结果都由会话文件提供。
 
   pi.on("tool_execution_end", (event) =>
     safe("tool_execution_end", () => {
       const s = state;
       if (!s?.session) return;
-      const partial = s.merge.consumeTool(event.toolCallId);
-      const endedAt = nowIso();
 
       pushEvent(s, "tool", "tool_execution_end", {
         toolCallId: event.toolCallId,
@@ -617,16 +532,14 @@ export default function probe(pi: ExtensionAPI): void {
         session_id: s.session.sessionId,
         parent_tool_call_id: event.parentToolCallId ?? null,
         tool_name: event.toolName,
-        // 参数在 tool_execution_start 已写过；这里给 null，服务端 upsert 保留原值
-        args: null,
-        result: capValue(event.result, s.config.maxRecordBytes).value,
-        partial_result: partial ? capValue(partial.partialResult, s.config.maxRecordBytes).value : null,
         is_error: event.isError === true,
         duration_ms: typeof event.durationMs === "number" ? event.durationMs : null,
-        started_at: partial?.startedAt ?? null,
-        ended_at: endedAt,
+        started_at: null,
+        ended_at: nowIso(),
         run_seq: s.runStartedAt ? s.runSeq : null,
         turn_index: s.turnStartedAt ? s.turnIndex : null,
+        entry_id: null,
+        result_entry_id: null,
       });
     }),
   );
@@ -729,7 +642,6 @@ export default function probe(pi: ExtensionAPI): void {
         }
       }
       s.queue.clear();
-      s.merge.clear();
       state = null;
     }
   });

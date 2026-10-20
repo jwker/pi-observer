@@ -17,8 +17,6 @@ export interface ProbeConfig {
   batchSize: number;
   /** 定时发送间隔 */
   batchIntervalMs: number;
-  /** 流式进度快照间隔（PRD §7.3：500 ms） */
-  progressIntervalMs: number;
   /** 单批最多带多少条 / 多少字节（服务端上限 2 MB，这里留出余量） */
   maxBatchRecords: number;
   maxBatchBytes: number;
@@ -27,8 +25,6 @@ export interface ProbeConfig {
   maxQueueBytes: number;
   /** 单条记录上限（PRD §7.4：512 KB） */
   maxRecordBytes: number;
-  /** 实时正文开关（C2 默认开） */
-  liveText: boolean;
   /** 每次模型请求往终端打一行采集摘要（长度 / 脱敏数 / 是否截断），默认关闭 */
   debugRequests: boolean;
 }
@@ -61,13 +57,11 @@ export function loadProbeConfig(env: Record<string, string | undefined> = proces
     tokenFile: env.PI_OBSERVER_TOKEN_FILE?.trim() || defaultTokenFile(),
     batchSize: intFromEnv(env.PI_OBSERVER_BATCH_SIZE, 50),
     batchIntervalMs: intFromEnv(env.PI_OBSERVER_BATCH_INTERVAL_MS, 300),
-    progressIntervalMs: intFromEnv(env.PI_OBSERVER_PROGRESS_INTERVAL_MS, 500),
     maxBatchRecords: intFromEnv(env.PI_OBSERVER_MAX_BATCH_RECORDS, 200),
     maxBatchBytes: intFromEnv(env.PI_OBSERVER_MAX_BATCH_BYTES, 1536 * 1024),
     maxQueueRecords: intFromEnv(env.PI_OBSERVER_MAX_QUEUE_RECORDS, 2000),
     maxQueueBytes: intFromEnv(env.PI_OBSERVER_MAX_QUEUE_BYTES, 64 * 1024 * 1024),
     maxRecordBytes: intFromEnv(env.PI_OBSERVER_MAX_RECORD_BYTES, 512 * 1024),
-    liveText: boolFromEnv(env.PI_OBSERVER_LIVE_TEXT, true),
     debugRequests: boolFromEnv(env.PI_OBSERVER_DEBUG_REQUESTS, false),
   };
 }

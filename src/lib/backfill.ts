@@ -592,8 +592,6 @@ function writeEntries(ctx: BackfillContext, input: WriteInput, warn: (message: s
   const { sessionId, entries } = input;
   const db = ctx.db;
   const maxPayload = ctx.payloadMaxBytes;
-  const jsonOrNull = (value: unknown): string | null =>
-    value === null || value === undefined ? null : serializeCapped(value, maxPayload).json;
 
   const upsertSession = db.prepare(`
     INSERT INTO sessions (
@@ -626,34 +624,35 @@ function writeEntries(ctx: BackfillContext, input: WriteInput, warn: (message: s
   const upsertTurn = db.prepare(`
     INSERT INTO turns (
       session_id, run_seq, turn_index, message_entry_id, started_at, ended_at,
-      stop_reason, thinking_level, assistant_message, tool_results, tokens_in, tokens_out, cost
+      stop_reason, thinking_level, tokens_in, tokens_out, cache_read, cache_write, cost
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(message_entry_id) DO UPDATE SET
       started_at = COALESCE(excluded.started_at, turns.started_at),
       ended_at = COALESCE(excluded.ended_at, turns.ended_at),
       stop_reason = COALESCE(excluded.stop_reason, turns.stop_reason),
       thinking_level = COALESCE(excluded.thinking_level, turns.thinking_level),
-      assistant_message = COALESCE(excluded.assistant_message, turns.assistant_message),
-      tool_results = COALESCE(excluded.tool_results, turns.tool_results),
       tokens_in = COALESCE(excluded.tokens_in, turns.tokens_in),
       tokens_out = COALESCE(excluded.tokens_out, turns.tokens_out),
+      cache_read = COALESCE(excluded.cache_read, turns.cache_read),
+      cache_write = COALESCE(excluded.cache_write, turns.cache_write),
       cost = COALESCE(excluded.cost, turns.cost)
   `);
 
+  // 参数 / 结果不复制：entry_id 与 result_entry_id 指向 messages，查询时再 join。
   const upsertTool = db.prepare(`
     INSERT INTO tool_calls (
-      tool_call_id, session_id, parent_tool_call_id, tool_name, args, result,
-      partial_result, is_error, duration_ms, started_at, ended_at
-    ) VALUES (?, ?, NULL, ?, ?, ?, NULL, ?, ?, ?, ?)
+      tool_call_id, session_id, parent_tool_call_id, tool_name,
+      is_error, duration_ms, started_at, ended_at, entry_id, result_entry_id
+    ) VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(tool_call_id) DO UPDATE SET
       tool_name = CASE WHEN excluded.tool_name <> '' THEN excluded.tool_name ELSE tool_calls.tool_name END,
-      args = COALESCE(excluded.args, tool_calls.args),
-      result = COALESCE(excluded.result, tool_calls.result),
       -- 只置位不清零：文件里没有结果时别把实时已经知道的「出错」擦掉
       is_error = CASE WHEN excluded.is_error = 1 THEN 1 ELSE tool_calls.is_error END,
       duration_ms = COALESCE(excluded.duration_ms, tool_calls.duration_ms),
-      started_at = COALESCE(excluded.started_at, tool_calls.started_at),
-      ended_at = COALESCE(excluded.ended_at, tool_calls.ended_at)
+      started_at = COALESCE(tool_calls.started_at, excluded.started_at),
+      ended_at = COALESCE(excluded.ended_at, tool_calls.ended_at),
+      entry_id = COALESCE(excluded.entry_id, tool_calls.entry_id),
+      result_entry_id = COALESCE(excluded.result_entry_id, tool_calls.result_entry_id)
   `);
 
   const turnOrdinal = db.prepare(`
@@ -661,20 +660,15 @@ function writeEntries(ctx: BackfillContext, input: WriteInput, warn: (message: s
      WHERE session_id = ? AND kind = 'message' AND role = 'assistant' AND entry_index < ?
   `);
 
-  // 助手条目的 toolResult 子条目（parentId 指回它）。预先按 parentId 归组，
-  // 这样写 turn 时就能一并填 tool_results 与 ended_at，不用来回扫。
-  const resultsByParent = new Map<string, Array<{ toolCallId: string | null; isError: boolean; timestamp: string | null }>>();
+  // 助手条目的 toolResult 子条目（parentId 指回它）。这里只取时间戳，
+  // 用来把 Turn 的 ended_at 推到最后一个工具结果；内容本身留在 messages 里。
+  const resultTimesByParent = new Map<string, string[]>();
   for (const entry of entries) {
     if (entry.type !== "message" || entry.parentId === null || !isObj(entry.raw.message)) continue;
-    const message = entry.raw.message;
-    if (message.role !== "toolResult") continue;
-    const list = resultsByParent.get(entry.parentId) ?? [];
-    list.push({
-      toolCallId: strOf(message.toolCallId),
-      isError: message.isError === true,
-      timestamp: entry.timestamp,
-    });
-    resultsByParent.set(entry.parentId, list);
+    if (entry.raw.message.role !== "toolResult") continue;
+    const list = resultTimesByParent.get(entry.parentId) ?? [];
+    if (entry.timestamp !== null) list.push(entry.timestamp);
+    resultTimesByParent.set(entry.parentId, list);
   }
 
   withTx(db, () => {
@@ -714,12 +708,12 @@ function writeEntries(ctx: BackfillContext, input: WriteInput, warn: (message: s
         const message = raw.message;
         const usage = isObj(message.usage) ? message.usage : null;
         const cost = usage !== null && isObj(usage.cost) ? usage.cost : null;
-        const children = resultsByParent.get(entryId) ?? [];
+        const children = resultTimesByParent.get(entryId) ?? [];
         const ordinal = (turnOrdinal.get(sessionId, entry.lineNo) as { n: number }).n;
         // 起止时间只能近似：文件里没有「这一轮什么时候开始」。用上一条（通常是用户消息）
         // 的时间当开始，助手条目与工具结果里最晚的时间当结束。
         const startedAt = previousTimestamp ?? entry.timestamp;
-        const endedAt = latestTimestamp([entry.timestamp, ...children.map((child) => child.timestamp)]);
+        const endedAt = latestTimestamp([entry.timestamp, ...children]);
         upsertTurn.run(
           sessionId,
           BACKFILL_RUN_SEQ,
@@ -729,15 +723,16 @@ function writeEntries(ctx: BackfillContext, input: WriteInput, warn: (message: s
           endedAt,
           strOf(message.stopReason),
           strOf(message.thinkingLevel),
-          jsonOrNull(message),
-          jsonOrNull(children.map((child) => ({ toolCallId: child.toolCallId, isError: child.isError }))),
           numOf(usage?.input),
           numOf(usage?.output),
+          numOf(usage?.cacheRead),
+          numOf(usage?.cacheWrite),
           cost === null ? null : numOf(cost.total),
         );
 
         for (const call of toolCallsOf(message)) {
-          upsertTool.run(call.id, sessionId, call.name, jsonOrNull(call.arguments), null, 0, null, entry.timestamp, null);
+          // 参数在助手条目里，结果在后续的 toolResult 条目里；这里先记下条目引用。
+          upsertTool.run(call.id, sessionId, call.name, 0, null, entry.timestamp, null, entryId, null);
         }
       }
 
@@ -751,12 +746,12 @@ function writeEntries(ctx: BackfillContext, input: WriteInput, warn: (message: s
             id,
             sessionId,
             strOf(message.toolName) ?? "",
-            null,
-            jsonOrNull(message),
             message.isError === true ? 1 : 0,
             numOf(message.durationMs),
             null,
             entry.timestamp,
+            null,
+            entryId,
           );
         }
       }
@@ -764,17 +759,8 @@ function writeEntries(ctx: BackfillContext, input: WriteInput, warn: (message: s
       previousTimestamp = entry.timestamp;
     }
 
-    // 计数与 token 成本走与实时路径同一份聚合；缓存读写只在这里补，
-    // 因为要从 payload 里 `json_extract`，放进每批都跑的聚合里代价太大。
+    // 计数、token、缓存与成本走与实时路径同一份聚合。
     refreshSessionAggregates(db, sessionId);
-    db.prepare(
-      `UPDATE sessions SET
-         cache_read = COALESCE((SELECT SUM(json_extract(payload, '$.message.usage.cacheRead'))
-                                  FROM messages WHERE session_id = ? AND kind = 'message'), 0),
-         cache_write = COALESCE((SELECT SUM(json_extract(payload, '$.message.usage.cacheWrite'))
-                                   FROM messages WHERE session_id = ? AND kind = 'message'), 0)
-       WHERE session_id = ?`,
-    ).run(sessionId, sessionId, sessionId);
   });
 }
 

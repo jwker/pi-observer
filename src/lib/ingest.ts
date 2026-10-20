@@ -3,7 +3,6 @@ import { Db, withTx } from "./db.ts";
 import { log } from "./log.ts";
 import {
   PROBE_PROTOCOL_VERSION,
-  progressEventId,
   type EventLayer,
   type IngestBatch,
   type IngestRecord,
@@ -14,8 +13,8 @@ import { broadcast } from "./sse.ts";
 
 export type ParseResult = { ok: true; batch: IngestBatch } | { ok: false; error: string };
 
-const KINDS = new Set(["session", "run", "event", "progress", "turn", "tool_call", "request"]);
-const EVENT_LAYERS = new Set<EventLayer>(["session", "agent", "turn", "message", "tool", "provider"]);
+const KINDS = new Set(["session", "run", "event", "turn", "tool_call", "request"]);
+const EVENT_LAYERS = new Set<EventLayer>(["session", "agent", "tool", "provider"]);
 const MAX_RECORDS_PER_BATCH = 1000;
 
 type Obj = Record<string, unknown>;
@@ -140,22 +139,6 @@ export function parseBatch(raw: unknown): ParseResult {
         });
         break;
       }
-      case "progress": {
-        const runSeq = intOrNull(item.run_seq);
-        const turnIndex = intOrNull(item.turn_index);
-        if (runSeq === null) errors.push(`records[${at}].run_seq 缺失`);
-        if (turnIndex === null) errors.push(`records[${at}].turn_index 缺失`);
-        checked.push({
-          kind: "progress",
-          session_id: req(item.session_id, "session_id", errors, at),
-          run_seq: runSeq ?? 0,
-          turn_index: turnIndex ?? 0,
-          text: typeof item.text === "string" ? item.text : "",
-          update_count: intOrNull(item.update_count) ?? 0,
-          started_at: str(item.started_at),
-        });
-        break;
-      }
       case "turn": {
         const runSeq = intOrNull(item.run_seq);
         const turnIndex = intOrNull(item.turn_index);
@@ -171,10 +154,10 @@ export function parseBatch(raw: unknown): ParseResult {
           ended_at: str(item.ended_at),
           stop_reason: str(item.stop_reason),
           thinking_level: str(item.thinking_level),
-          assistant_message: item.assistant_message ?? null,
-          tool_results: item.tool_results ?? null,
           tokens_in: intOrNull(item.tokens_in),
           tokens_out: intOrNull(item.tokens_out),
+          cache_read: intOrNull(item.cache_read),
+          cache_write: intOrNull(item.cache_write),
           cost: num(item.cost),
         });
         break;
@@ -186,15 +169,14 @@ export function parseBatch(raw: unknown): ParseResult {
           session_id: req(item.session_id, "session_id", errors, at),
           parent_tool_call_id: str(item.parent_tool_call_id),
           tool_name: str(item.tool_name) ?? "",
-          args: item.args ?? null,
-          result: item.result ?? null,
-          partial_result: item.partial_result ?? null,
           is_error: item.is_error === true || item.is_error === 1,
           duration_ms: intOrNull(item.duration_ms),
           started_at: str(item.started_at),
           ended_at: str(item.ended_at),
           run_seq: intOrNull(item.run_seq),
           turn_index: intOrNull(item.turn_index),
+          entry_id: str(item.entry_id),
+          result_entry_id: str(item.result_entry_id),
         });
         break;
       }
@@ -304,7 +286,7 @@ export function applyBatch(batch: IngestBatch, db: Db): IngestResponse {
     const upsertTurn = db.prepare(`
       INSERT INTO turns (
         session_id, run_seq, turn_index, message_entry_id, started_at, ended_at,
-        stop_reason, thinking_level, assistant_message, tool_results, tokens_in, tokens_out, cost
+        stop_reason, thinking_level, tokens_in, tokens_out, cache_read, cache_write, cost
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(message_entry_id) DO UPDATE SET
         run_seq = excluded.run_seq,
@@ -313,30 +295,29 @@ export function applyBatch(batch: IngestBatch, db: Db): IngestResponse {
         ended_at = COALESCE(excluded.ended_at, turns.ended_at),
         stop_reason = COALESCE(excluded.stop_reason, turns.stop_reason),
         thinking_level = COALESCE(excluded.thinking_level, turns.thinking_level),
-        assistant_message = COALESCE(excluded.assistant_message, turns.assistant_message),
-        tool_results = COALESCE(excluded.tool_results, turns.tool_results),
         tokens_in = COALESCE(excluded.tokens_in, turns.tokens_in),
         tokens_out = COALESCE(excluded.tokens_out, turns.tokens_out),
+        cache_read = COALESCE(excluded.cache_read, turns.cache_read),
+        cache_write = COALESCE(excluded.cache_write, turns.cache_write),
         cost = COALESCE(excluded.cost, turns.cost)
     `);
 
     const upsertTool = db.prepare(`
       INSERT INTO tool_calls (
-        tool_call_id, session_id, parent_tool_call_id, tool_name, args, result,
-        partial_result, is_error, duration_ms, started_at, ended_at, run_seq, turn_index
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        tool_call_id, session_id, parent_tool_call_id, tool_name, is_error,
+        duration_ms, started_at, ended_at, run_seq, turn_index, entry_id, result_entry_id
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(tool_call_id) DO UPDATE SET
         tool_name = CASE WHEN excluded.tool_name <> '' THEN excluded.tool_name ELSE tool_calls.tool_name END,
         parent_tool_call_id = COALESCE(excluded.parent_tool_call_id, tool_calls.parent_tool_call_id),
-        args = COALESCE(excluded.args, tool_calls.args),
-        result = COALESCE(excluded.result, tool_calls.result),
-        partial_result = COALESCE(excluded.partial_result, tool_calls.partial_result),
-        is_error = excluded.is_error,
+        is_error = CASE WHEN excluded.is_error = 1 THEN 1 ELSE tool_calls.is_error END,
         duration_ms = COALESCE(excluded.duration_ms, tool_calls.duration_ms),
         started_at = COALESCE(tool_calls.started_at, excluded.started_at),
         ended_at = COALESCE(excluded.ended_at, tool_calls.ended_at),
         run_seq = COALESCE(excluded.run_seq, tool_calls.run_seq),
-        turn_index = COALESCE(excluded.turn_index, tool_calls.turn_index)
+        turn_index = COALESCE(excluded.turn_index, tool_calls.turn_index),
+        entry_id = COALESCE(excluded.entry_id, tool_calls.entry_id),
+        result_entry_id = COALESCE(excluded.result_entry_id, tool_calls.result_entry_id)
     `);
 
     // 请求开始时写 payload，响应到达时用同一 (session_id, request_seq) 补状态码与 headers。
@@ -360,15 +341,11 @@ export function applyBatch(batch: IngestBatch, db: Db): IngestResponse {
         turn_index = COALESCE(excluded.turn_index, llm_requests.turn_index)
     `);
 
-    // 普通事件幂等忽略；进度快照按确定性 event_id 覆盖同一行（PRD §7.3）
+    // 普通事件幂等忽略：同一 event_id 重复推送时不覆盖首次落库的内容。
     const insertEvent = db.prepare(`
       INSERT INTO events (event_id, session_id, layer, event_type, run_seq, turn_index, payload, occurred_at, received_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(event_id) DO UPDATE SET
-        payload = excluded.payload,
-        occurred_at = COALESCE(excluded.occurred_at, events.occurred_at),
-        received_at = excluded.received_at
-      WHERE excluded.event_id LIKE 'progress:%'
+      ON CONFLICT(event_id) DO NOTHING
     `);
 
     for (const record of batch.records) {
@@ -412,10 +389,10 @@ export function applyBatch(batch: IngestBatch, db: Db): IngestResponse {
             record.ended_at,
             record.stop_reason,
             record.thinking_level,
-            jsonOrNull(record.assistant_message),
-            jsonOrNull(record.tool_results),
             record.tokens_in,
             record.tokens_out,
+            record.cache_read,
+            record.cache_write,
             record.cost,
           );
           touched.add(record.session_id);
@@ -428,15 +405,14 @@ export function applyBatch(batch: IngestBatch, db: Db): IngestResponse {
             record.session_id,
             record.parent_tool_call_id,
             record.tool_name,
-            jsonOrNull(record.args),
-            jsonOrNull(record.result),
-            jsonOrNull(record.partial_result),
             record.is_error ? 1 : 0,
             record.duration_ms,
             record.started_at,
             record.ended_at,
             record.run_seq,
             record.turn_index,
+            record.entry_id,
+            record.result_entry_id,
           );
           touched.add(record.session_id);
           bump("tool_call");
@@ -477,26 +453,6 @@ export function applyBatch(batch: IngestBatch, db: Db): IngestResponse {
           );
           touched.add(record.session_id);
           bump("request");
-          break;
-        }
-        case "progress": {
-          insertEvent.run(
-            progressEventId(record.session_id, record.run_seq, record.turn_index),
-            record.session_id,
-            "message",
-            "message_progress",
-            record.run_seq,
-            record.turn_index,
-            JSON.stringify({
-              text: record.text,
-              update_count: record.update_count,
-              bytes: Buffer.byteLength(record.text, "utf8"),
-            }),
-            record.started_at,
-            now,
-          );
-          touched.add(record.session_id);
-          bump("progress");
           break;
         }
       }
@@ -543,11 +499,11 @@ export function applyBatch(batch: IngestBatch, db: Db): IngestResponse {
  *
  * 三处需要解释的取值：
  *
- * 1. `message_count` 取「实时事件数」与「文件条目数」的**较大值**。
- *    两个来源都只是下界：探针可能漏收（比如启动前就有消息），文件可能滞后于实时。
- *    PRD §14 M2 要求「消息数与 Pi 自带的 /tree 一致」，所以文件回填之后以文件为准。
+ * 1. `message_count` 取文件条目数（`messages` 里 `kind = 'message'` 的行）。
+ *    协议 v3 起事件不再携带消息正文，`message_start` 也不再推送，所以这里只有文件这一个口径；
+ *    文件由启动扫描、进页面、每秒同步与 settle 对账持续补齐（PRD §9.1）。
  *
- * 2. `turn_count` / `tool_call_count` / token / 成本都从 turns 与 tool_calls 表求和，
+ * 2. `turn_count` / `tool_call_count` / token / 缓存 / 成本都从 turns 与 tool_calls 表求和，
  *    这两张表的持久键（`message_entry_id`、`tool_call_id`）在实时与回填之间是同一个，
  *    所以两条路径 upsert 到同一行，求和不会重复计算。
  *
@@ -557,16 +513,14 @@ export function applyBatch(batch: IngestBatch, db: Db): IngestResponse {
 export function refreshSessionAggregates(db: Db, sessionId: string): void {
   db.prepare(`
     UPDATE sessions SET
-      message_count = MAX(
-        (SELECT COUNT(*) FROM events
-          WHERE session_id = sessions.session_id AND event_type = 'message_start'),
-        (SELECT COUNT(*) FROM messages
-          WHERE session_id = sessions.session_id AND kind = 'message')
-      ),
+      message_count = (SELECT COUNT(*) FROM messages
+                        WHERE session_id = sessions.session_id AND kind = 'message'),
       turn_count = (SELECT COUNT(*) FROM turns WHERE session_id = sessions.session_id),
       tool_call_count = (SELECT COUNT(*) FROM tool_calls WHERE session_id = sessions.session_id),
       tokens_in = (SELECT COALESCE(SUM(tokens_in), 0) FROM turns WHERE session_id = sessions.session_id),
       tokens_out = (SELECT COALESCE(SUM(tokens_out), 0) FROM turns WHERE session_id = sessions.session_id),
+      cache_read = (SELECT COALESCE(SUM(COALESCE(cache_read, json_extract(assistant_message, '$.usage.cacheRead'))), 0) FROM turns WHERE session_id = sessions.session_id),
+      cache_write = (SELECT COALESCE(SUM(COALESCE(cache_write, json_extract(assistant_message, '$.usage.cacheWrite'))), 0) FROM turns WHERE session_id = sessions.session_id),
       cost = (SELECT COALESCE(SUM(cost), 0) FROM turns WHERE session_id = sessions.session_id),
       last_activity_at = COALESCE(
         (SELECT MAX(received_at) FROM events WHERE session_id = sessions.session_id),

@@ -58,6 +58,13 @@ export function migrate(db: Db): void {
     // v4：工具调用补运行 / Turn 关联，用于按 Turn 筛选与详情页关联。
     ensureColumn(db, "tool_calls", "run_seq", "INTEGER");
     ensureColumn(db, "tool_calls", "turn_index", "INTEGER");
+    // v5：正文去重。turns 只留 token / 缓存 / 成本与时间；tool_calls 只留标量 + 条目引用。
+    ensureColumn(db, "turns", "cache_read", "INTEGER");
+    ensureColumn(db, "turns", "cache_write", "INTEGER");
+    ensureColumn(db, "tool_calls", "entry_id", "TEXT");
+    ensureColumn(db, "tool_calls", "result_entry_id", "TEXT");
+    // 索引必须在补列之后建：旧库的 tool_calls 还没有 entry_id。
+    db.exec("CREATE INDEX IF NOT EXISTS idx_tools_entry ON tool_calls(session_id, entry_id)");
     db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
   });
   log("info", "db", "schema 已就绪", { from: current, to: SCHEMA_VERSION });

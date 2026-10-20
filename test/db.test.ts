@@ -184,11 +184,22 @@ test("旧版迁移：给 llm_requests / tool_calls 补关联列，旧行保留",
     );
     assert.ok(toolColumns.includes("run_seq"), "工具调用补上 run_seq");
     assert.ok(toolColumns.includes("turn_index"), "工具调用补上 turn_index");
+    assert.ok(toolColumns.includes("entry_id"), "工具调用补上 entry_id");
+    assert.ok(toolColumns.includes("result_entry_id"), "工具调用补上 result_entry_id");
     const tool = migrated
-      .prepare("SELECT run_seq, turn_index FROM tool_calls WHERE tool_call_id = 'old-tool'")
-      .get() as { run_seq: number | null; turn_index: number | null };
+      .prepare("SELECT run_seq, turn_index, entry_id, result_entry_id FROM tool_calls WHERE tool_call_id = 'old-tool'")
+      .get() as { run_seq: number | null; turn_index: number | null; entry_id: string | null; result_entry_id: string | null };
     assert.equal(tool.run_seq, null);
     assert.equal(tool.turn_index, null);
+    assert.equal(tool.entry_id, null, "旧行没有条目引用，保持 NULL");
+    assert.equal(tool.result_entry_id, null);
+
+    // 旧库没有 turns 表时会由 SCHEMA_SQL 新建，缓存列直接带上
+    const turnColumns = (migrated.prepare("PRAGMA table_info(turns)").all() as Array<{ name: string }>).map(
+      (item) => item.name,
+    );
+    assert.ok(turnColumns.includes("cache_read"), "turns 补上 cache_read");
+    assert.ok(turnColumns.includes("cache_write"), "turns 补上 cache_write");
 
     const version = migrated.prepare("PRAGMA user_version").get() as { user_version: number };
     assert.equal(version.user_version, SCHEMA_VERSION);

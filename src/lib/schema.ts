@@ -11,7 +11,7 @@
  * 旧行保持 NULL。要改列类型或加非空约束则必须先想清楚旧数据怎么办。
  */
 
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 
 export const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS sessions (
@@ -46,6 +46,7 @@ CREATE TABLE IF NOT EXISTS runs (
   UNIQUE (session_id, run_seq)
 );
 
+-- v5 起正文不再复制：assistant_message / tool_results 只留给旧行，7 天保留期后自然淘汰。
 CREATE TABLE IF NOT EXISTS turns (
   id                INTEGER PRIMARY KEY AUTOINCREMENT,
   session_id        TEXT NOT NULL,
@@ -60,9 +61,13 @@ CREATE TABLE IF NOT EXISTS turns (
   tool_results      TEXT,
   tokens_in         INTEGER,
   tokens_out        INTEGER,
+  cache_read        INTEGER,
+  cache_write       INTEGER,
   cost              REAL
 );
 
+-- v5 起参数与结果从 messages 里按 entry_id / result_entry_id join；
+-- args / result / partial_result 只留给旧行。
 CREATE TABLE IF NOT EXISTS tool_calls (
   tool_call_id         TEXT PRIMARY KEY,
   session_id           TEXT NOT NULL,
@@ -76,7 +81,9 @@ CREATE TABLE IF NOT EXISTS tool_calls (
   started_at           TEXT,
   ended_at             TEXT,
   run_seq              INTEGER,
-  turn_index           INTEGER
+  turn_index           INTEGER,
+  entry_id             TEXT,
+  result_entry_id      TEXT
 );
 
 CREATE TABLE IF NOT EXISTS llm_requests (

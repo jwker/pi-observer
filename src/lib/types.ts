@@ -68,18 +68,22 @@ export interface ToolCallIndexRow extends ToolCallRow {
   parent_tool_call_id: string | null;
   run_seq: number | null;
   turn_index: number | null;
+  /** 助手消息条目（参数所在） */
+  entry_id: string | null;
+  /** toolResult 条目（结果所在） */
+  result_entry_id: string | null;
   args_bytes: number;
   result_bytes: number;
-  partial_bytes: number;
   /** 参数 JSON 的前 500 字符，用于列表摘要；完整参数在详情页 */
   args_preview: string | null;
+  /** 结果里的第一段文本（前 500 字符），没有文本时为空 */
+  result_preview: string | null;
 }
 
-/** 工具详情：参数、结果与部分结果已解析 */
+/** 工具详情：参数与结果已解析（来自 messages，按 entry_id / result_entry_id join） */
 export interface ToolCallDetail extends ToolCallIndexRow {
   args: unknown;
   result: unknown;
-  partial_result: unknown;
 }
 
 /**
@@ -125,15 +129,6 @@ export interface ProbeStatusRow {
   probe_version: string | null;
 }
 
-/** 会话级用汇总（M3-5）：tokens 与成本来自 turns，缓存读写来自助手消息 usage */
-export interface SessionUsageRow {
-  tokens_in: number;
-  tokens_out: number;
-  cache_read: number;
-  cache_write: number;
-  cost: number;
-}
-
 /** 会话已有数据的最大序号；探针在本地游标缺失时用它种子化（schema v3 / M3-3） */
 export interface SessionCursorRow {
   request_seq_max: number;
@@ -155,8 +150,10 @@ export interface MessageRow {
 }
 
 /**
- * 消息树的条目索引（PRD §11.2）：不含 payload，`summary` 截断到 200 字符只够树标签用。
- * 全文与原始条目在点击节点时按需取，见 `MessageDetail`。
+ * 条目的「索引形状」：不含 payload，只带树结构与摘要需要的字段。
+ *
+ * 它同时是 `tree.ts` 的输入类型与 `stream.ts` 建行模型时的输入；
+ * 完整 payload 在行详情弹窗里按需取（`getMessageDetail`）。
  */
 export interface MessageIndexRow {
   entry_id: string;
@@ -170,9 +167,10 @@ export interface MessageIndexRow {
   payload_bytes: number;
 }
 
-/** 单条条目的全文（点击树节点时按需取） */
+/** 单条条目的全文（行详情弹窗按需取） */
 export interface MessageDetail {
   entry_id: string;
+  parent_id: string | null;
   kind: string;
   role: string | null;
   timestamp: string | null;
@@ -182,6 +180,77 @@ export interface MessageDetail {
   /** 原始条目 JSON；超过上限时是 `{"truncated":true,"bytes":N}` */
   payload: unknown;
   payload_bytes: number;
+}
+
+/**
+ * 时间线用的条目行（单页重构 R2）：带正文与思考摘要，但不带完整 payload。
+ *
+ * 为什么不直接复用 `MessageIndexRow`：时间线要显示比树标签更长的正文，还要把
+ * 助手消息里的 thinking 单独拿出来（思考开关靠它）。完整正文仍在详情弹窗里按需取。
+ */
+export interface TimelineMessageRow {
+  entry_id: string;
+  parent_id: string | null;
+  kind: string;
+  role: string | null;
+  timestamp: string | null;
+  entry_index: number;
+  /** `messages.text` 的正文摘要（回填时已截到 2 KB） */
+  text: string | null;
+  /** 助手消息里的第一段 thinking（截到 2 KB）；其它条目为 null */
+  thinking: string | null;
+  payload_bytes: number;
+}
+
+/**
+ * 单页时间线一次取到的原始数据（R2）。分页、分组、行排序在 `stream.ts` 里做，
+ * 这里只负责把库里的行按会话取全。
+ *
+ * `totals` 是库里真实行数；某个数组短于总数时，说明被 `limit` 截断，界面要如实说明。
+ */
+export interface SessionStreamData {
+  session: SessionRow;
+  messages: TimelineMessageRow[];
+  turns: TurnRow[];
+  events: EventRow[];
+  tools: ToolCallIndexRow[];
+  requests: RequestIndexRow[];
+  totals: {
+    messages: number;
+    turns: number;
+    events: number;
+    tools: number;
+    requests: number;
+  };
+}
+
+export type RowDetailKind = "message" | "tool" | "request" | "event";
+
+/**
+ * 行详情弹窗一次取到的内容（R3）。
+ *
+ * 为什么用「一个袋子里有什么就放什么」而不是给四类行各开一个接口：弹窗只需要
+ * 当前行对应的主对象，加上能从钩子载荷里确定关联到的条目 / 请求 / 工具。返回结构
+ * 固定，客户端不用按 kind 猜字段。
+ */
+export interface RowDetailData {
+  kind: RowDetailKind;
+  /** 文件条目（消息、系统条目、工具结果条目） */
+  message: MessageDetail | null;
+  /** 工具调用（含完整参数与结果） */
+  tool: ToolCallDetail | null;
+  /** 请求（含脱敏 payload 与响应头） */
+  request: RequestDetail | null;
+  /** 单条钩子事件 */
+  event: EventRow | null;
+  /** 与这一行关联的钩子事件；按 id 去重 */
+  relatedEvents: EventRow[];
+  /** 钩子载荷指向的工具；事件详情用 */
+  relatedTools: ToolCallDetail[];
+  /** 钩子载荷指向的请求；事件详情用 */
+  relatedRequest: RequestDetail | null;
+  /** 工具参数 / 结果所在的文件条目；工具详情的原始 JSON 用 */
+  relatedMessages: MessageDetail[];
 }
 
 /**

@@ -19,6 +19,8 @@ import {
 } from "../src/lib/backfill.ts";
 import { type Db, openDb } from "../src/lib/db.ts";
 import { applyBatch } from "../src/lib/ingest.ts";
+import { PROBE_PROTOCOL_VERSION } from "../src/lib/protocol.ts";
+import { getToolCallDetail, listToolCallIndex } from "../src/lib/queries.ts";
 
 const T = (seconds: number) => `2026-10-19T08:00:${String(seconds).padStart(2, "0")}.000Z`;
 
@@ -201,23 +203,36 @@ test("backfillFile：会话 / 条目 / turn / 工具调用全部落库，字段�
     assert.equal(turns[0].tokens_out, 20);
     assert.equal(turns[0].started_at, T(2)); // 上一条（用户消息）的时间
     assert.equal(turns[0].ended_at, T(4)); // 工具结果的时间
-    assert.deepEqual(JSON.parse(turns[0].tool_results as string), [{ toolCallId: "call_1", isError: false }]);
+    assert.equal(turns[0].cache_read, 30);
+    assert.equal(turns[0].cache_write, 5);
+    assert.equal(turns[0].assistant_message, null, "正文不再复制进 turns");
+    assert.equal(turns[0].tool_results, null, "工具结果不再复制进 turns");
     assert.equal(turns[1].stop_reason, "stop");
     assert.equal(turns[1].started_at, T(4));
     assert.equal(turns[1].ended_at, T(5));
 
-    // 工具调用：调用参数与结果分别来自助手条目与工具结果条目
+    // 工具调用：参数与结果不复制，只留标量与条目引用
     const tool = row(f.db, "SELECT * FROM tool_calls WHERE tool_call_id = 'call_1'");
     assert.equal(tool.session_id, "s1");
     assert.equal(tool.tool_name, "read");
-    assert.deepEqual(JSON.parse(tool.args as string), { path: "/tmp/proj/x.ts" });
+    assert.equal(tool.entry_id, "a1");
+    assert.equal(tool.result_entry_id, "t1");
+    assert.equal(tool.args, null);
+    assert.equal(tool.result, null);
     assert.equal(tool.is_error, 0);
     assert.equal(tool.duration_ms, 12);
     assert.equal(tool.started_at, T(3));
     assert.equal(tool.ended_at, T(4));
-    const toolResult = JSON.parse(tool.result as string) as { toolCallId: string; content: unknown };
-    assert.equal(toolResult.toolCallId, "call_1");
-    assert.deepEqual(toolResult.content, [{ type: "text", text: "文件内容" }]);
+
+    // 查询时按引用 join messages，参数与结果仍然拿得到
+    const index = listToolCallIndex("s1", 10, f.db);
+    assert.equal(index.length, 1);
+    assert.ok((index[0].args_preview ?? "").includes("/tmp/proj/x.ts"));
+    assert.ok(index[0].args_bytes > 0);
+    assert.ok(index[0].result_bytes > 0);
+    const detail = getToolCallDetail("s1", "call_1", f.db);
+    assert.deepEqual(detail?.args, { path: "/tmp/proj/x.ts" });
+    assert.deepEqual((detail?.result as { content: unknown }).content, [{ type: "text", text: "文件内容" }]);
 
     // 读取进度
     const file = row(f.db, "SELECT * FROM jsonl_files WHERE path = ?", f.path);
@@ -382,8 +397,8 @@ test("backfillFile：实时先写过 turn 时，回填落同一行且不动 run_
     // 先按实时路径写同一批：会话 + 助手 turn（同一个 message_entry_id）
     applyBatch(
       {
-        protocol: 2,
-        probe_version: "0.1.0",
+        protocol: PROBE_PROTOCOL_VERSION,
+        probe_version: "0.3.0",
         dropped_count: 0,
         queue_depth: 0,
         records: [
@@ -410,10 +425,10 @@ test("backfillFile：实时先写过 turn 时，回填落同一行且不动 run_
             ended_at: T(3),
             stop_reason: "toolUse",
             thinking_level: "medium",
-            assistant_message: { role: "assistant" },
-            tool_results: [],
             tokens_in: null,
             tokens_out: null,
+            cache_read: null,
+            cache_write: null,
             cost: null,
           },
         ],
