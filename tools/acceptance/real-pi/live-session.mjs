@@ -66,7 +66,8 @@ try {
   console.log(`提示词：${prompt}`);
   const child = spawn(
     "pi",
-    ["-p", prompt, "--extension", join(REPO, "ext"), "--session-dir", sessionsDir],
+    // -ne：不做扩展发现（否则用户级 ~/.pi/agent/extensions 里的探针会和 -e 叠加成两份）
+    ["-p", prompt, "-ne", "-e", join(REPO, "ext"), "--session-dir", sessionsDir],
     {
       cwd: REPO,
       env: {

@@ -26,7 +26,8 @@ echo "=== 0. 前置：服务端在跑 ==="
 curl -s $BASE/api/health; echo
 
 echo "=== 1. 起一个长会话（探针已加载）==="
-nohup pi -p -a --session-dir $OUT/sessions --extension $REPO/ext \
+# -ne：不做扩展发现（否则用户级 ~/.pi/agent/extensions 里的探针会和 -e 叠加成两份）
+nohup pi -p -a --session-dir $OUT/sessions -ne -e $REPO/ext \
   "用 bash 连续执行三次 sleep 12（每次单独一次工具调用），每次之后用一句话说明第几次完成。" \
   > $OUT/pi.out 2> $OUT/pi.err &
 PI_PID=$!
