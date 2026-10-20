@@ -78,7 +78,7 @@ const target = sessions
 if (!target) {
   console.log("找不到目标会话");
 } else {
-  const events = (await (await fetch(`${base}/api/sessions/${target.session_id}/events?limit=2000`)).json()).events ?? [];
+  const events = (await (await fetch(`${base}/api/session?id=${target.session_id}`)).json()).data?.events ?? [];
   const during = events.filter((event) => event.occurred_at && event.occurred_at > killTs && event.occurred_at < restartTs);
   const after = events.filter((event) => event.occurred_at && event.occurred_at >= restartTs);
   const kinds = {};

@@ -86,23 +86,29 @@ const rows = [];
 let failures = 0;
 
 for (const session of sessions) {
-  // 先让页面路径补读一次，避免「文件比库新」造成的假不一致
-  await fetch(`${base}/sessions/${encodeURIComponent(session.session_id)}`).catch(() => {});
+  // 先让取数路径补读一次，避免「文件比库新」造成的假不一致
+  await fetch(`${base}/api/session?id=${encodeURIComponent(session.session_id)}`).catch(() => {});
 
   const pi = piSessionData(session.file_path);
-  const ours = await json(
-    `${base}/api/sessions/${encodeURIComponent(session.session_id)}/messages?limit=20000`,
-  );
-  const turnsPayload = await json(
-    `${base}/api/sessions/${encodeURIComponent(session.session_id)}/turns?limit=2000`,
-  );
+  const ours = await json(`${base}/api/session?id=${encodeURIComponent(session.session_id)}`);
+  const data = ours.data ?? {};
   const expectedUsage = piUsage(pi.entries);
-  const actualUsage = turnsPayload.usage ?? {};
+  // 会话级用量 = 该会话所有 Turn 之和（与看板内部口径一致）
+  const actualUsage = (data.turns ?? []).reduce(
+    (total, turn) => ({
+      tokens_in: total.tokens_in + (turn.tokens_in ?? 0),
+      tokens_out: total.tokens_out + (turn.tokens_out ?? 0),
+      cache_read: total.cache_read + (turn.cache_read ?? 0),
+      cache_write: total.cache_write + (turn.cache_write ?? 0),
+      cost: total.cost + (turn.cost ?? 0),
+    }),
+    { tokens_in: 0, tokens_out: 0, cache_read: 0, cache_write: 0, cost: 0 },
+  );
 
   const piIds = (pi.entries ?? []).map((entry) => entry.id);
-  const ourIds = (ours.messages ?? []).map((row) => row.entry_id);
+  const ourIds = (data.messages ?? []).map((row) => row.entry_id);
   const piMessages = (pi.entries ?? []).filter((entry) => entry.type === "message").length;
-  const ourMessages = (ours.messages ?? []).filter((row) => row.kind === "message").length;
+  const ourMessages = (data.messages ?? []).filter((row) => row.kind === "message").length;
   const ourLeaf = ourIds.length === 0 ? null : ourIds[ourIds.length - 1];
 
   const sameIds = piIds.length === ourIds.length && piIds.every((id, index) => id === ourIds[index]);

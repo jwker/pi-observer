@@ -28,7 +28,8 @@ for (;;) {
       if (match) sessionId = match.session_id;
     }
     if (sessionId) {
-      const events = (await (await fetch(`${base}/api/sessions/${sessionId}/events?limit=2000`)).json()).events ?? [];
+      const payload = await (await fetch(`${base}/api/session?id=${sessionId}`)).json();
+      const events = payload.data?.events ?? [];
       for (const event of events) {
         if (!visible.has(event.event_id)) visible.set(event.event_id, { at: Date.now(), occurredAt: event.occurred_at });
       }

@@ -1,13 +1,14 @@
 /**
  * 档 A：不依赖真实 Pi 的离线验收（`npm run accept`）。
  *
- * 用途：起一个隔离的服务端实例，把「建库 → 写入 → 落库 → SSE → 页面」整条链路
- * 用可断言的方式跑一遍。失败会以非零退出码结束，所以能直接进 `npm run verify`。
+ * 用途：起一个隔离的服务端实例，把「建库 → 探针写入 → 文件回填 → 时间线 → 行详情」
+ * 整条链路用可断言的方式跑一遍。失败会以非零退出码结束，所以能直接进 `npm run verify`。
  *
  * 与真实 Pi 有关的三条判据（探针卡顿、强杀恢复、读写并发）不在这里，
  * 见 tools/acceptance/real-pi/ 与 docs/prd-v0.2.md §14。
  *
- * 记录形状与 `ext/index.ts` 发出的完全一致——它就是「探针 ↔ 服务端」的唯一线上契约。
+ * **记录形状与 `ext/index.ts` 发出的完全一致**——它就是「探针 ↔ 服务端」的唯一线上契约，
+ * 见 src/lib/protocol.ts（协议 v3）。
  */
 import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -33,10 +34,13 @@ import {
   waitForHealth,
 } from "./lib/harness.mjs";
 
+const PROTOCOL = 3;
 const SID = "accept-offline";
 const CWD = "/tmp/accept-offline";
-/** 放进正文里，用于确认「详情页 HTML 里真的有消息内容」 */
+/** 放进正文里，用于确认「内容确实从会话文件到了页面」 */
 const MARKER = "验收正文标记-ACCEPT-OFFLINE-TEXT";
+
+// ── 协议 v3 的记录形状（对应 src/lib/protocol.ts）────────────────────────
 
 const sessionRecord = (overrides = {}) => ({
   kind: "session",
@@ -53,16 +57,18 @@ const sessionRecord = (overrides = {}) => ({
   ...overrides,
 });
 
-const runRecord = () => ({
+const runRecord = (overrides = {}) => ({
   kind: "run",
   session_id: SID,
   run_seq: 1,
   started_at: "2026-10-19T08:00:00.000Z",
   ended_at: null,
   outcome: null,
+  ...overrides,
 });
 
-const eventRecord = (eventId, { layer = "turn", type = "turn_start", payload = {}, group = {} } = {}) => ({
+/** 事件：v3 只推文件里没有的信息（运行状态、工具起止、请求与响应） */
+const eventRecord = (eventId, { layer = "agent", type = "agent_settled", payload = {}, group = {} } = {}) => ({
   kind: "event",
   event_id: eventId,
   session_id: SID,
@@ -74,32 +80,8 @@ const eventRecord = (eventId, { layer = "turn", type = "turn_start", payload = {
   turn_index: group.turn_index ?? 0,
 });
 
-const progressRecord = (text) => ({
-  kind: "progress",
-  session_id: SID,
-  run_seq: 1,
-  turn_index: 0,
-  text,
-  update_count: 7,
-  started_at: nowIso(),
-});
-
-const toolCallRecord = () => ({
-  kind: "tool_call",
-  tool_call_id: `${SID}-tool-1`,
-  session_id: SID,
-  parent_tool_call_id: null,
-  tool_name: "bash",
-  args: { command: "ls ext" },
-  result: { text: "client.ts config.ts flush.ts" },
-  partial_result: null,
-  is_error: false,
-  duration_ms: 12,
-  started_at: "2026-10-19T08:00:01.000Z",
-  ended_at: "2026-10-19T08:00:01.012Z",
-});
-
-const turnRecord = (marker) => ({
+/** Turn：只带元信息与标量，正文由 `message_entry_id` 指向 `messages` */
+const turnRecord = (overrides = {}) => ({
   kind: "turn",
   session_id: SID,
   run_seq: 1,
@@ -109,22 +91,61 @@ const turnRecord = (marker) => ({
   ended_at: "2026-10-19T08:00:02.000Z",
   stop_reason: "stop",
   thinking_level: "high",
-  assistant_message: { role: "assistant", content: [{ type: "text", text: marker }] },
-  tool_results: [{ toolCallId: `${SID}-tool-1`, isError: false }],
   tokens_in: 100,
   tokens_out: 200,
+  cache_read: 10,
+  cache_write: 5,
   cost: 0.0123,
+  ...overrides,
+});
+
+/** 工具调用：v3 不带参数与结果，只带条目引用（由文件同步器补写） */
+const toolCallRecord = (overrides = {}) => ({
+  kind: "tool_call",
+  tool_call_id: `${SID}-tool-1`,
+  session_id: SID,
+  parent_tool_call_id: null,
+  tool_name: "bash",
+  is_error: false,
+  duration_ms: 12,
+  started_at: "2026-10-19T08:00:01.000Z",
+  ended_at: "2026-10-19T08:00:01.012Z",
+  run_seq: 1,
+  turn_index: 0,
+  entry_id: null,
+  result_entry_id: null,
+  ...overrides,
+});
+
+/** 模型请求：请求与响应按同一 `request_seq` 配对 */
+const requestRecord = (overrides = {}) => ({
+  kind: "request",
+  session_id: SID,
+  request_seq: 1,
+  provider: "accept-provider",
+  api: "accept-api",
+  model: "accept-model",
+  payload: { messages: [{ role: "user", content: MARKER }] },
+  payload_bytes: 512,
+  payload_truncated: false,
+  status: null,
+  response_headers: null,
+  correlation: "serial_assumed",
+  created_at: "2026-10-19T08:00:00.800Z",
+  run_seq: 1,
+  turn_index: 0,
+  ...overrides,
 });
 
 const envelope = (records) => ({
-  protocol: 2,
+  protocol: PROTOCOL,
   probe_version: "accept-offline",
   dropped_count: 0,
   queue_depth: 0,
   records,
 });
 
-// ── M2-2 回填用的合成会话文件（形状取自真实的 v3 会话文件）────────────────
+// ── 回填用的合成会话文件（形状取自真实的 v3 会话文件）────────────────────
 const BF_SID = "accept-backfill-01";
 const BF_CWD = "/tmp/accept-backfill";
 /** 放进用户消息正文里，用来确认入库的是文件里的内容 */
@@ -211,17 +232,17 @@ try {
   }
   console.log(`· 隔离实例：${base}；数据目录 ${dataDir}\n`);
 
-  await checks.check("A1", "健康检查", async () => {
+  await checks.check("A1", "健康检查：协议 v3、schema 版本、探针状态如实为空", async () => {
     assertEqual(health.ok, true, "ok");
     assertEqual(health.service, "pi-observer", "service");
-    assertEqual(health.protocol, 2, "protocol");
-    assert(health.schema_user_version >= 1, `schema_user_version 应为 ≥1，实际 ${health.schema_user_version}`);
+    assertEqual(health.protocol, PROTOCOL, "protocol");
+    assert(health.schema_user_version >= 5, `schema_user_version 应为 ≥5，实际 ${health.schema_user_version}`);
     assert("probe" in health, "健康检查应有 probe 字段");
     assertEqual(health.probe, null, "还没收到任何批次时 probe 应为 null（如实标注，不编造）");
-    return `sqlite ${health.sqlite}，schema ${health.schema_user_version}，subscribers ${health.subscribers}，probe null`;
+    return `sqlite ${health.sqlite}，schema ${health.schema_user_version}，protocol ${health.protocol}，subscribers ${health.subscribers}，probe null`;
   });
 
-  await checks.check("A2", "空库：列表页与接口可用", async () => {
+  await checks.check("A2", "空库：单页与接口可用", async () => {
     const home = await getJson(`${base}/`);
     assertEqual(home.status, 200, "GET / 状态码");
     const list = await getJson(`${base}/api/sessions`);
@@ -261,20 +282,43 @@ try {
     return `${mb} MB → 413（上限 2 MB），且库里仍然 0 条会话`;
   });
 
-  await checks.check("A6", "合法批次入库，会话 / 事件 / 探针状态可查", async () => {
-    const markerEvent = track(`${SID}-ev-tool-end`);
+  await checks.check("A6", "协议版本不对的整批被拒（v2 探针不能混进来）", async () => {
+    const response = await postBatch(base, token, {
+      protocol: 2,
+      probe_version: "old-probe",
+      dropped_count: 0,
+      queue_depth: 0,
+      records: [sessionRecord()],
+    });
+    assertEqual(response.status, 400, "v2 批次的状态码");
+    assertIncludes(response.json?.error ?? response.text, "协议版本不匹配", "错误信息要说明是协议问题");
+
+    const list = await getJson(`${base}/api/sessions`);
+    assertEqual(list.json.count, 0, "被拒批次之后库里仍是 0 条会话");
+    return "protocol 2 → 400（整批拒绝，提示升级探针），库里没有留下半条";
+  });
+
+  await checks.check("A7", "合法批次入库：会话 / 事件 / Turn / 工具 / 请求都落库", async () => {
     const response = await postBatch(
       base,
       token,
       envelope([
         sessionRecord(),
         runRecord(),
-        eventRecord(track(`${SID}-ev-turn-start`), { layer: "turn", type: "turn_start" }),
-        eventRecord(track(`${SID}-ev-message-start`), { layer: "message", type: "message_start", payload: { role: "assistant" } }),
-        eventRecord(markerEvent, { layer: "tool", type: "tool_execution_end", payload: { toolName: "bash" } }),
-        progressRecord(MARKER),
+        eventRecord(track(`${SID}-ev-agent-start`), { type: "agent_start", payload: { runSeq: 1 } }),
+        eventRecord(track(`${SID}-ev-tool-start`), {
+          layer: "tool",
+          type: "tool_execution_start",
+          payload: { toolCallId: `${SID}-tool-1`, toolName: "bash" },
+        }),
+        eventRecord(track(`${SID}-ev-tool-end`), {
+          layer: "tool",
+          type: "tool_execution_end",
+          payload: { toolCallId: `${SID}-tool-1`, toolName: "bash" },
+        }),
         toolCallRecord(),
-        turnRecord(MARKER),
+        turnRecord(),
+        requestRecord(),
       ]),
     );
     assertEqual(response.status, 200, "写入状态码");
@@ -282,18 +326,8 @@ try {
 
     const list = await getJson(`${base}/api/sessions`);
     assertEqual(list.json.count, 1, "会话数");
-    const session = list.json.sessions[0];
-    assertEqual(session.session_id, SID, "会话 id");
-    assertEqual(session.cwd, CWD, "会话 cwd");
-
-    const events = await getJson(`${base}/api/sessions/${SID}/events?limit=2000`);
-    assertEqual(events.status, 200, "事件接口状态码");
-    const types = events.json.events.map((event) => event.event_type);
-    assert(types.includes("message_progress"), `应有 message_progress，实际 ${JSON.stringify(types)}`);
-
-    const turns = await getJson(`${base}/api/sessions/${SID}/turns`);
-    assertEqual(turns.status, 200, "Turn 接口状态码");
-    assertEqual(turns.json.count, 1, "Turn 数");
+    assertEqual(list.json.sessions[0].session_id, SID, "会话 id");
+    assertEqual(list.json.sessions[0].cwd, CWD, "会话 cwd");
 
     const afterHealth = await getJson(`${base}/api/health`);
     const probe = afterHealth.json.probe;
@@ -303,31 +337,82 @@ try {
     assertEqual(probe.queue_depth, 0, "queue_depth");
     assert(typeof probe.last_seen_at === "string" && probe.last_seen_at.length > 0, "last_seen_at 应有值");
 
-    return `写入 200；会话 1，事件 ${events.json.count}（含 message_progress），Turn ${turns.json.count}，probe.last_seen_at ${probe.last_seen_at}`;
+    const db = await openTempDb(dataDir);
+    try {
+      const counts = {
+        events: db.prepare("SELECT COUNT(*) AS n FROM events").get().n,
+        turns: db.prepare("SELECT COUNT(*) AS n FROM turns").get().n,
+        tools: db.prepare("SELECT COUNT(*) AS n FROM tool_calls").get().n,
+        requests: db.prepare("SELECT COUNT(*) AS n FROM llm_requests").get().n,
+        runs: db.prepare("SELECT COUNT(*) AS n FROM runs").get().n,
+      };
+      assertEqual(counts.events, 3, "事件数");
+      assertEqual(counts.turns, 1, "Turn 数");
+      assertEqual(counts.tools, 1, "工具数");
+      assertEqual(counts.requests, 1, "请求数");
+      assertEqual(counts.runs, 1, "运行数");
+
+      // v3 的关键约定：工具行不复制参数与结果
+      const tool = db.prepare("SELECT * FROM tool_calls WHERE tool_call_id = ?").get(`${SID}-tool-1`);
+      assert(tool !== undefined && tool !== null, "库里没有工具行");
+      assertEqual(tool.args, null, "v3 工具行不该有 args 副本");
+      assertEqual(tool.result, null, "v3 工具行不该有 result 副本");
+      assertEqual(tool.entry_id, null, "探针不知道条目 id，应为 null 等文件同步器补");
+
+      // Turn 不带正文
+      const turn = db.prepare("SELECT * FROM turns WHERE message_entry_id = ?").get(`${SID}-entry-1`);
+      assert(turn !== undefined && turn !== null, "库里没有 Turn 行");
+      assertEqual(turn.assistant_message, null, "v3 Turn 不该复制助手正文");
+      assertEqual(turn.cache_read, 10, "Turn 的缓存读取");
+      assertEqual(turn.cache_write, 5, "Turn 的缓存写入");
+    } finally {
+      db.close();
+    }
+
+    return `会话 1、事件 3、Turn 1、工具 1、请求 1、运行 1；工具与 Turn 行都不带正文副本`;
   });
 
-  await checks.check("A7", "重复投递同一批不产生重复行", async () => {
-    const before = await getJson(`${base}/api/sessions/${SID}/events?limit=2000`);
+  await checks.check("A8", "重复投递同一批不产生重复行", async () => {
+    const before = await openTempDb(dataDir);
+    const beforeEvents = before.prepare("SELECT COUNT(*) AS n FROM events").get().n;
+    const beforeTools = before.prepare("SELECT COUNT(*) AS n FROM tool_calls").get().n;
+    before.close();
+
     const again = await postBatch(
       base,
       token,
       envelope([
         sessionRecord(),
-        eventRecord(`${SID}-ev-turn-start`, { layer: "turn", type: "turn_start" }),
-        eventRecord(`${SID}-ev-message-start`, { layer: "message", type: "message_start", payload: { role: "assistant" } }),
-        eventRecord(`${SID}-ev-tool-end`, { layer: "tool", type: "tool_execution_end", payload: { toolName: "bash" } }),
-        progressRecord(MARKER),
+        runRecord(),
+        eventRecord(`${SID}-ev-agent-start`, { type: "agent_start", payload: { runSeq: 1 } }),
+        eventRecord(`${SID}-ev-tool-start`, {
+          layer: "tool",
+          type: "tool_execution_start",
+          payload: { toolCallId: `${SID}-tool-1`, toolName: "bash" },
+        }),
+        eventRecord(`${SID}-ev-tool-end`, {
+          layer: "tool",
+          type: "tool_execution_end",
+          payload: { toolCallId: `${SID}-tool-1`, toolName: "bash" },
+        }),
         toolCallRecord(),
-        turnRecord(MARKER),
+        turnRecord(),
+        requestRecord(),
       ]),
     );
     assertEqual(again.status, 200, "重复写入的状态码");
-    const after = await getJson(`${base}/api/sessions/${SID}/events?limit=2000`);
-    assertEqual(after.json.count, before.json.count, "重复投递后的事件数");
-    return `事件数保持 ${after.json.count} 条`;
+
+    const after = await openTempDb(dataDir);
+    try {
+      assertEqual(after.prepare("SELECT COUNT(*) AS n FROM events").get().n, beforeEvents, "重复投递后的事件数");
+      assertEqual(after.prepare("SELECT COUNT(*) AS n FROM tool_calls").get().n, beforeTools, "重复投递后的工具数");
+    } finally {
+      after.close();
+    }
+    return `事件数保持 ${beforeEvents} 条、工具数保持 ${beforeTools} 条`;
   });
 
-  await checks.check("A8", "单条超大 payload 被截断并打标", async () => {
+  await checks.check("A9", "单条超大 payload 被截断并打标", async () => {
     const id = track(`${SID}-cap`);
     const note = "y".repeat(1_800_000);
     const response = await postBatch(
@@ -350,7 +435,7 @@ try {
     }
   });
 
-  await checks.check("A9", "写入到可见的往返延迟", async () => {
+  await checks.check("A10", "写入到可见的往返延迟", async () => {
     const id = track(`${SID}-latency`);
     const started = Date.now();
     const response = await postBatch(base, token, envelope([sessionRecord(), eventRecord(id)]));
@@ -358,8 +443,8 @@ try {
 
     let visibleAt = null;
     while (Date.now() - started < 3000) {
-      const events = await getJson(`${base}/api/sessions/${SID}/events?limit=2000`);
-      if (events.json.events.some((event) => event.event_id === id)) {
+      const stream = await getJson(`${base}/api/session?id=${SID}`);
+      if (stream.json?.data?.events?.some((event) => event.event_id === id)) {
         visibleAt = Date.now();
         break;
       }
@@ -371,7 +456,7 @@ try {
     return `${delay} ms（直投 HTTP，不含探针的 300 ms 批量间隔——那条在 real-pi 档）`;
   });
 
-  await checks.check("A10", "SSE 逐帧推送（两次写入两帧，不合并）", async () => {
+  await checks.check("A11", "SSE 逐帧推送（两次写入两帧，不合并）", async () => {
     sse = openSse(base);
     await sse.waitConnected(5000);
 
@@ -397,16 +482,36 @@ try {
     return `两帧间隔 ${frame2.at - frame1.at} ms，载荷 ${JSON.stringify(frame1.data)}`;
   });
 
-  await checks.check("A11", "会话详情页可打开且含正文", async () => {
-    const response = await fetch(`${base}/sessions/${SID}`);
-    const html = await response.text();
-    assertEqual(response.status, 200, "GET /sessions/<id> 状态码");
-    assertIncludes(html, SID, "详情页 HTML 中的会话 id");
-    assertIncludes(html, MARKER, "详情页 HTML 中的消息正文");
-    return `HTTP 200，HTML ${(Buffer.byteLength(html, "utf8") / 1024).toFixed(0)} KB，含会话 id 与正文标记`;
+  await checks.check("A12", "轮询版本号：库里没变就回 unchanged，不重传数据", async () => {
+    const first = await getJson(`${base}/api/session?id=${SID}`);
+    assertEqual(first.status, 200, "第一次取数的状态码");
+    assertEqual(first.json.unchanged, undefined, "第一次取数应带完整数据");
+    assert(typeof first.json.version === "string" && first.json.version.length > 0, "应带版本号");
+    assert(first.json.data?.events?.length > 0, "数据里应有事件");
+
+    const second = await getJson(`${base}/api/session?id=${SID}&v=${encodeURIComponent(first.json.version)}`);
+    assertEqual(second.status, 200, "带版本号取数的状态码");
+    assertEqual(second.json.unchanged, true, "版本一致时应回 unchanged");
+    assertEqual(second.json.data, undefined, "unchanged 时不该重传数据");
+
+    return `版本号 ${first.json.version.length} 字符；一致时只回 { unchanged: true }`;
   });
 
-  await checks.check("A12", "落库真相：WAL、行数与唯一性", async () => {
+  await checks.check("A13", "单页 HTML：左栏会话 + 右栏时间线都在", async () => {
+    const response = await fetch(`${base}/?session=${SID}`);
+    const html = await response.text();
+    assertEqual(response.status, 200, "GET / 状态码");
+    assertIncludes(html, "pi-observer", "页头品牌");
+    assertIncludes(html, CWD, "会话头里的工作目录");
+    assertIncludes(html, SID, "页面里的会话 id");
+    assertIncludes(html, "app-body", "单页外壳");
+    assertIncludes(html, "sidebar", "左栏");
+    assertIncludes(html, "tl-top", "右侧时间线");
+    assertIncludes(html, "已到最早", "到底了的提示（这个会话只有 1 个 Turn，没有更早的）");
+    return `HTTP 200，HTML ${(Buffer.byteLength(html, "utf8") / 1024).toFixed(0)} KB，含左栏与时间线`;
+  });
+
+  await checks.check("A14", "落库真相：WAL、行数与唯一性", async () => {
     const db = await openTempDb(dataDir);
     try {
       const journal = db.prepare("PRAGMA journal_mode").get();
@@ -433,13 +538,13 @@ try {
         counts.events >= postedEventIds.size,
         `事件行数 ${counts.events} 少于我投递过的 ${postedEventIds.size} 条`,
       );
-      return `WAL；事件 ${counts.events}（投递 ${postedEventIds.size} 条 + 服务端派生的进度事件），turns 1，tool_calls 1，runs 1`;
+      return `WAL；事件 ${counts.events}（投递 ${postedEventIds.size} 条），turns 1，tool_calls 1，runs 1`;
     } finally {
       db.close();
     }
   });
 
-  await checks.check("A13", "数据隔离：只写临时库", async () => {
+  await checks.check("A15", "数据隔离：只写临时库", async () => {
     assert(existsSync(join(dataDir, "observer.db")), "临时目录里没有 observer.db");
     assert(existsSync(join(dataDir, "token")), "临时目录里没有 token");
     const list = await getJson(`${base}/api/sessions`);
@@ -449,7 +554,7 @@ try {
     return `写入 ${join(dataDir, "observer.db")}；仓库里的 ${realDb} 是否参与：${existsSync(realDb) ? "存在但未被本次验收写入" : "不存在"}`;
   });
 
-  // ── 档 A 续：M2-2 回填入库 ────────────────────────────────────────────────
+  // ── 档 A 续：回填与单页时间线 ──────────────────────────────────────────
   // 另起一个隔离实例，会话目录里**事先**放好一份会话文件：
   // 启动扫描要在收到任何请求之前就把它入库，然后分别验证「进页面补读」与「手动触发」。
   const bfDataDir = makeTempDir();
@@ -464,12 +569,12 @@ try {
   try {
     await waitForHealth(bfBase);
     // 令牌在第一次写入尝试时才生成（与 /api/ingest 一致）：先用一次不带令牌的请求把它逼出来，
-    // 顺便把「不带令牌被拒」这条判据记下来，稍后在 A16 里断言。
+    // 顺便把「不带令牌被拒」这条判据记下来，稍后在 A18 里断言。
     const denied = await fetch(`${bfBase}/api/backfill`, { method: "POST" });
     const deniedStatus = denied.status;
     const bfToken = await readToken(bfDataDir);
 
-    await checks.check("A14", "启动扫描：事先存在的会话文件已入库，字段与文件一致", async () => {
+    await checks.check("A16", "启动扫描：会话文件已入库，字段与文件一致", async () => {
       // 服务端在第一个请求之前就该扫完；这里轮询着等一下，避免依赖 register() 的时序细节
       let count = 0;
       for (let i = 0; i < 50 && count === 0; i += 1) {
@@ -512,13 +617,15 @@ try {
         assertEqual(turn.stop_reason, "toolUse", "stop_reason");
         assertEqual(turn.thinking_level, "high", "thinking_level");
         assertEqual(turn.tokens_in, 11, "turn tokens_in");
+        assertEqual(turn.cache_read, 33, "turn 缓存读取");
 
         const tool = db.prepare("SELECT * FROM tool_calls WHERE tool_call_id = 'bf-call-1'").get();
         assert(tool !== undefined && tool !== null, "库里没有 bf-call-1 的工具调用");
         assertEqual(tool.tool_name, "bash", "tool_name");
-        assertEqual(JSON.parse(tool.args).command, "echo hi", "工具参数");
         assertEqual(tool.is_error, 0, "is_error");
         assertEqual(tool.duration_ms, 9, "duration_ms（来自工具结果条目）");
+        assertEqual(tool.entry_id, "bf-a1", "工具行指向助手条目");
+        assertEqual(tool.result_entry_id, "bf-t1", "工具行指向结果条目");
 
         assertEqual(db.prepare("SELECT COUNT(*) AS n FROM jsonl_files").get().n, 1, "jsonl_files 行数");
 
@@ -530,7 +637,7 @@ try {
       }
     });
 
-    await checks.check("A15", "进页面补读：页面请求会把启动之后新增的内容补上", async () => {
+    await checks.check("A17", "进页面补读：取数请求会把启动之后新增的内容补上", async () => {
       const marker2 = "页面补读标记-ACCEPT-BACKFILL-PAGE";
       appendFileSync(
         bfPath,
@@ -549,17 +656,15 @@ try {
         "utf8",
       );
 
-      // 先确认这一条还没入库——否则下面的断言说明不了是页面触发的
+      // 先确认这一条还没入库——否则下面的断言说明不了是请求触发的
       const before = await openTempDb(bfDataDir);
       const beforeCount = before.prepare("SELECT COUNT(*) AS n FROM messages").get().n;
       before.close();
       assertEqual(beforeCount, 4, "补读之前 messages 行数");
 
-      const response = await fetch(`${bfBase}/sessions/${BF_SID}`);
-      const html = await response.text();
-      assertEqual(response.status, 200, "GET /sessions/<回填会话> 状态码");
-      assertIncludes(html, BF_SID, "详情页 HTML 中的会话 id");
-      assertIncludes(html, BF_CWD, "详情页 HTML 中的工作目录");
+      const response = await getJson(`${bfBase}/api/session?id=${BF_SID}`);
+      assertEqual(response.status, 200, "GET /api/session 状态码");
+      assertEqual(response.json.data.messages.length, 5, "取数返回的条目数");
 
       const db = await openTempDb(bfDataDir);
       try {
@@ -569,13 +674,13 @@ try {
         assertEqual(session.message_count, 4, "补读之后 message_count");
         assertEqual(session.turn_count, 2, "补读之后 turn_count");
         assertEqual(session.tokens_in, 16, "补读之后 tokens_in");
-        return `页面请求前 4 条 → 请求后 5 条条目 / 2 个 turn，且页面返回 200`;
+        return `请求前 4 条 → 请求后 5 条条目 / 2 个 turn`;
       } finally {
         db.close();
       }
     });
 
-    await checks.check("A16", "手动触发回填：要令牌、幂等、没变的文件跳过", async () => {
+    await checks.check("A18", "手动触发回填：要令牌、幂等、没变的文件跳过", async () => {
       assertEqual(deniedStatus, 401, "不带令牌触发回填的状态码");
 
       const first = await fetch(`${bfBase}/api/backfill`, {
@@ -586,7 +691,7 @@ try {
       assertEqual(first.status, 200, "带令牌触发回填的状态码");
       assertEqual(firstJson.ok, true, "回填响应 ok");
       assertEqual(firstJson.summary.files, 1, "扫到的文件数");
-      assertEqual(firstJson.summary.skipped, 1, "本次应跳过 1 个文件（A15 已经读过）");
+      assertEqual(firstJson.summary.skipped, 1, "本次应跳过 1 个文件（A17 已经读过）");
       assertEqual(firstJson.summary.entries, 0, "跳过时不应产出条目");
 
       const second = await fetch(`${bfBase}/api/backfill`, {
@@ -602,93 +707,67 @@ try {
       return `无令牌 401；带令牌扫 1 个文件全部跳过；两次触发后 messages 5 / turns 2 不变`;
     });
 
-    // ── 档 A 续：M2-3 消息树 ────────────────────────────────────────────────
-    // 树用「索引行」渲染（不带 payload），点开某个节点才按需取全文。
-    await checks.check("A17", "消息树索引：只给索引行，父子关系与文件一致", async () => {
-      const list = await getJson(`${bfBase}/api/sessions/${BF_SID}/messages`);
-      assertEqual(list.status, 200, "索引接口状态码");
-      assertEqual(list.json.count, 5, "索引行数（A15 又追加了一条助手条目）");
-      assertEqual(list.json.total, 5, "条目总数（没有截断）");
+    // ── 档 A 续：单页时间线的行模型 ──────────────────────────────────────
+    await checks.check("A19", "时间线数据：一个用户 Turn 一组，prelude 装首条用户消息之前", async () => {
+      const stream = await getJson(`${bfBase}/api/session?id=${BF_SID}`);
+      assertEqual(stream.status, 200, "取数状态码");
+      const data = stream.json.data;
+      assert(data, "应带数据");
+      assertEqual(data.messages.length, 5, "条目数");
+      assertEqual(data.turns.length, 2, "模型 Turn 数");
+      assertEqual(data.totals.messages, 5, "totals 里的条目数");
+      assertEqual(data.totals.turns, 2, "totals 里的 Turn 数");
+      assertEqual(data.totals.events, 0, "回填会话没有钩子事件");
 
-      const rows = list.json.messages;
-      assertEqual(
-        rows.map((r) => r.entry_id).join(","),
-        "bf-m1,bf-u1,bf-a1,bf-t1,bf-a2",
-        "条目按文件行号排序",
+      // 首条用户消息之前有条目（model_change），它属于 prelude，不单独成 Turn
+      const userMessages = data.messages.filter((m) => m.role === "user");
+      assertEqual(userMessages.length, 1, "用户消息数");
+      const before = data.messages.filter((m) => m.entry_index < userMessages[0].entry_index);
+      assert(before.length > 0, "首条用户消息之前应该有条目");
+
+      // 工具参数只存一份：正文在 messages.payload 里
+      const tool = data.tools[0];
+      assert(tool !== undefined, "应有工具行");
+      assertEqual(tool.entry_id, "bf-a1", "工具行指向助手条目");
+      assertEqual(tool.result_entry_id, "bf-t1", "工具行指向结果条目");
+      assert(tool.args_preview !== null && tool.args_preview !== "", "工具行应带参数预览");
+      assert(tool.args === undefined, "工具行不该带完整参数");
+      return `5 条条目 → 1 个用户 Turn + prelude；工具行带参数预览但不带完整参数`;
+    });
+
+    await checks.check("A20", "行详情：正文、工具参数与结果按需取全", async () => {
+      const stream = await getJson(`${bfBase}/api/session?id=${BF_SID}`);
+      const data = stream.json.data;
+      const userMessage = data.messages.find((m) => m.role === "user");
+
+      const message = await getJson(
+        `${bfBase}/api/detail?session=${BF_SID}&kind=message&id=${userMessage.entry_id}`,
       );
-      assertEqual(rows[0].kind, "model_change", "第一条条目的 kind");
-      assertEqual(rows[1].parent_id, null, "用户条目的 parent_id（文件里就是 null）");
-      assertEqual(rows[2].parent_id, "bf-u1", "助手条目的 parent_id");
-      assertEqual(rows[3].parent_id, "bf-a1", "工具结果条目的 parent_id");
-      assertEqual(rows[4].parent_id, "bf-t1", "补读进来的助手条目的 parent_id");
-      assert(rows.every((r) => r.payload === undefined), "索引行里不该带 payload（全文要点开才取）");
-      assertIncludes(rows[1].summary, BF_MARKER, "索引摘要含用户正文");
-      assert(rows[1].summary.length <= 200, `摘要该截到 200 字符，实际 ${rows[1].summary.length}`);
-      assert(rows[2].payload_bytes > 0, "助手条目应记录 payload 字节数");
-      return `5 条索引行；父链 bf-u1(根) → bf-a1 → bf-t1 → bf-a2，bf-m1 自成一个根；行内无 payload`;
-    });
+      assertEqual(message.status, 200, "消息详情状态码");
+      assertEqual(message.json.detail.kind, "message", "kind");
+      assertEqual(message.json.detail.message.entry_id, userMessage.entry_id, "条目 id");
+      assertIncludes(JSON.stringify(message.json.detail.message.payload), BF_MARKER, "原始条目 JSON 里的正文");
+      assert(message.json.detail.message.payload_bytes > 0, "详情该带 payload 字节数");
 
-    await checks.check("A18", "点开节点取全文；页面首屏已经把树渲染出来", async () => {
-      const detail = await getJson(`${bfBase}/api/sessions/${BF_SID}/messages?entry=bf-a1`);
-      assertEqual(detail.status, 200, "单条详情接口状态码");
-      assertEqual(detail.json.message.entry_id, "bf-a1", "详情条目 id");
-      assertEqual(detail.json.message.kind, "message", "详情条目 kind");
-      assertEqual(detail.json.message.role, "assistant", "详情条目 role");
-      assertEqual(detail.json.message.payload.message.role, "assistant", "原始条目 JSON 里的 role");
-      assertEqual(detail.json.message.payload.message.usage.input, 11, "原始条目 JSON 里的 tokens_in");
-      assert((detail.json.message.text ?? "").length > 0, "详情该带正文摘要");
+      const tool = await getJson(
+        `${bfBase}/api/detail?session=${BF_SID}&kind=tool&id=${data.tools[0].tool_call_id}`,
+      );
+      assertEqual(tool.status, 200, "工具详情状态码");
+      assertEqual(tool.json.detail.kind, "tool", "kind");
+      assertEqual(tool.json.detail.tool.args.command, "echo hi", "完整参数");
+      assertEqual(tool.json.detail.tool.result.content[0].text, "hi", "完整结果");
+      assertEqual(tool.json.detail.relatedMessages.length, 2, "关联的条目数（助手条目 + 结果条目）");
 
-      const missing = await fetch(`${bfBase}/api/sessions/${BF_SID}/messages?entry=bf-nope`);
+      const missing = await getJson(`${bfBase}/api/detail?session=${BF_SID}&kind=message&id=nope`);
       assertEqual(missing.status, 404, "取不存在的条目应 404");
+      const badKind = await getJson(`${bfBase}/api/detail?session=${BF_SID}&kind=xxx&id=1`);
+      assertEqual(badKind.status, 400, "非法 kind 应 400");
 
-      const page = await fetch(`${bfBase}/sessions/${BF_SID}`);
-      const html = await page.text();
-      assertEqual(page.status, 200, "详情页状态码");
-      assertIncludes(html, "消息树", "页面里有消息树面板");
-      assertIncludes(html, "node-line", "页面里有树节点");
-      assertIncludes(html, BF_MARKER, "树节点上能看到用户正文");
-      assertIncludes(html, "off-branch", "不在当前分支上的条目被标出来（bf-m1 的 parentId 是空的，自成一根）");
-      assertIncludes(html, "5 条条目", "面板头给出条目数");
-      return `单条接口给出原始条目（role 与 tokens 与文件一致），不存在的条目 404；首屏 HTML 含树、正文与分支标记`;
+      return `消息详情带原始 JSON；工具详情带完整参数与结果并关联 2 个条目；不存在的条目 404、非法 kind 400`;
     });
 
-    // ── 档 A 续：M2-4 会话列表页 ────────────────────────────────────────────
-    await checks.check("A19", "会话列表：按项目分组、摘要取首条用户消息、回填会话标「未对账」", async () => {
-      const api = await getJson(`${bfBase}/api/sessions`);
-      assertEqual(api.status, 200, "列表接口状态码");
-      assertEqual(api.json.total, 1, "库里的会话总数");
-      assertEqual(api.json.count, 1, "列表行数");
-
-      const row = api.json.sessions[0];
-      assertIncludes(row.first_user_text ?? "", BF_MARKER, "列表行要带首条用户消息摘要");
-      assertEqual(row.source, "backfill", "来源仍是 backfill");
-
-      const stats = api.json.stats;
-      for (const key of [
-        "events_today",
-        "tokens_in_today",
-        "tokens_out_today",
-        "dropped_total",
-        "unreconciled_sessions",
-      ]) {
-        assertEqual(typeof stats[key], "number", `概览指标 ${key} 该是数字`);
-      }
-      assertEqual(stats.unreconciled_sessions, 1, "概览里的未对账会话数");
-
-      const page = await fetch(`${bfBase}/`);
-      const html = await page.text();
-      assertEqual(page.status, 200, "列表页状态码");
-      assertIncludes(html, BF_CWD, "分组头上的项目路径");
-      assertIncludes(html, BF_MARKER, "行里的首条用户消息摘要");
-      assertIncludes(html, "未对账", "回填会话的状态标记");
-      assertIncludes(html, "首条用户消息", "列头说明摘要来源");
-      assertIncludes(html, "今日事件", "概览条的指标");
-      assertIncludes(html, "共 1 个会话", "页头的会话总数");
-      return `1 行：摘要含用户正文、状态标未对账；概览指标齐全且未对账会话数 1`;
-    });
-
-    // ── 档 A 续：M2-5 对账与状态推进 ────────────────────────────────────────
-    await checks.check("A20", "agent_settled 之后对账：补齐文件里新增的条目，live 变 merged", async () => {
+    // ── 档 A 续：对账与状态推进 ──────────────────────────────────────────
+    await checks.check("A21", "agent_settled 之后对账：补齐文件里新增的条目，live 变 merged", async () => {
       // 模拟「这一轮结束时 Pi 才把最后一条写完」：先追加进文件，再用批量写入报 settle
       appendFileSync(
         bfPath,
@@ -708,8 +787,8 @@ try {
       );
 
       const posted = await postBatch(bfBase, bfToken, {
-        protocol: 2,
-        probe_version: "0.1.0",
+        protocol: PROTOCOL,
+        probe_version: "0.3.0",
         dropped_count: 0,
         queue_depth: 0,
         records: [
@@ -768,10 +847,10 @@ try {
       return `settle 后 8 秒内对账：bf-a3 入库、source merged、last_reconciled_at ${seen.last_reconciled_at}`;
     });
 
-    await checks.check("A21", "session_shutdown：会话推进到已结束，概览里出现核对时间", async () => {
+    await checks.check("A22", "session_shutdown：会话推进到已结束", async () => {
       const posted = await postBatch(bfBase, bfToken, {
-        protocol: 2,
-        probe_version: "0.1.0",
+        protocol: PROTOCOL,
+        probe_version: "0.3.0",
         dropped_count: 0,
         queue_depth: 0,
         records: [
@@ -781,7 +860,7 @@ try {
             session_id: BF_SID,
             layer: "session",
             event_type: "session_shutdown",
-            payload: { reason: "quit", targetSessionFile: null },
+            payload: { reason: "quit" },
             occurred_at: nowIso(),
             run_seq: 1,
             turn_index: 0,
@@ -797,13 +876,11 @@ try {
 
       const list = await getJson(`${bfBase}/api/sessions`);
       assertEqual(list.json.sessions[0].state, "ended", "列表接口里的状态");
-      assertEqual(list.json.stats.unreconciled_sessions, 0, "对账过的会话不再算未对账");
-      assert(list.json.stats.last_reconciled_at !== null, "概览里的最近对账不再是空");
-      return `关闭事件 → state ended；列表已不再是「未对账」，最近对账 ${list.json.stats.last_reconciled_at}`;
+      return `关闭事件 → state ended；列表接口同步`;
     });
 
-    // ── 档 A 续：M2-6 会话文件被截短（模拟重写）────────────────────────────
-    await checks.check("A22", "文件被截短：识别为重写并从头重读，不产生重复条目", async () => {
+    // ── 档 A 续：会话文件被截短（模拟重写）────────────────────────────
+    await checks.check("A23", "文件被截短：识别为重写并从头重读，不产生重复条目", async () => {
       // 截成「头部 + 前两条条目」，模拟整文件重写（版本迁移 / fork）
       const lines = readFileSync(bfPath, "utf8").split("\n").filter((line) => line !== "");
       writeFileSync(bfPath, `${lines.slice(0, 3).join("\n")}\n`, "utf8");
@@ -844,8 +921,8 @@ try {
       return `3 行文件 → 识别为重写、重读 2 条；${beforeCount} 条条目 / ${beforeDistinct} 个 id 不变，无重复（已不在文件里的条目保留，见 PRD §9.2）`;
     });
 
-    // ── 档 A 续：M3-1 模型请求采集 ───────────────────────────────────────
-    await checks.check("A23", "模型请求：payload 脱敏、原始字节数、响应状态与 headers 落库", async () => {
+    // ── 档 A 续：模型请求的脱敏与落库 ───────────────────────────────────
+    await checks.check("A24", "模型请求：payload 脱敏、原始字节数、响应状态与 headers 落库", async () => {
       const payload = {
         model: "accept-model",
         messages: [{ role: "user", content: "请求正文标记-ACCEPT-REQUEST" }],
@@ -864,8 +941,8 @@ try {
       };
 
       const started = await postBatch(bfBase, bfToken, {
-        protocol: 2,
-        probe_version: "0.2.0",
+        protocol: PROTOCOL,
+        probe_version: "0.3.0",
         dropped_count: 0,
         queue_depth: 0,
         records: [
@@ -896,8 +973,8 @@ try {
       assertEqual(started.status, 200, "请求开始记录的状态码");
 
       const answered = await postBatch(bfBase, bfToken, {
-        protocol: 2,
-        probe_version: "0.2.0",
+        protocol: PROTOCOL,
+        probe_version: "0.3.0",
         dropped_count: 0,
         queue_depth: 0,
         records: [
@@ -959,237 +1036,122 @@ try {
       return `1 条请求：payload_bytes ${payloadBytes} 与原始长度一致；authorization / x-api-key / 响应头凭据都已脱敏；status 200；时间线 2 条事件`;
     });
 
-    // ── 档 A 续：M3-3 请求列表与详情 ─────────────────────────────────────
-    await checks.check("A24", "请求列表与详情：token / 成本按 run_seq + turn_index 关联，payload 和 headers 按需取", async () => {
-      const postedTurn = await postBatch(bfBase, bfToken, {
-        protocol: 2,
-        probe_version: "0.2.0",
-        dropped_count: 0,
-        queue_depth: 0,
-        records: [
-          {
-            kind: "turn",
-            session_id: BF_SID,
-            run_seq: 9,
-            turn_index: 1,
-            message_entry_id: "accept-request-turn-1",
-            started_at: "2026-10-19T08:10:00.000Z",
-            ended_at: "2026-10-19T08:10:01.000Z",
-            stop_reason: "stop",
-            thinking_level: "off",
-            assistant_message: {
-              role: "assistant",
-              content: [{ type: "text", text: "请求对应 Turn 的助手消息" }],
-              usage: { input: 111, output: 222, cacheRead: 33, cacheWrite: 44, cost: { total: 0.043 } },
-            },
-            tool_results: [],
-            tokens_in: 111,
-            tokens_out: 222,
-            cost: 0.043,
-          },
-        ],
-      });
-      assertEqual(postedTurn.status, 200, "写入关联 Turn 的状态码");
-
-      const list = await getJson(`${bfBase}/api/sessions/${BF_SID}/requests`);
-      assertEqual(list.status, 200, "请求列表接口状态码");
-      assertEqual(list.json.total, 1, "请求总数");
-      assertEqual(list.json.count, 1, "请求列表行数");
-      const row = list.json.requests[0];
-      assertEqual(row.request_seq, 1, "请求序号");
-      assertEqual(row.run_seq, 9, "列表行带 run_seq");
-      assertEqual(row.turn_index, 1, "列表行带 turn_index");
-      assertEqual(row.tokens_in, 111, "输入 token 来自关联 Turn");
-      assertEqual(row.tokens_out, 222, "输出 token 来自关联 Turn");
-      assertEqual(row.cost, 0.043, "成本来自关联 Turn");
-      assert(row.payload === undefined, "列表行不带 payload");
-      assert(row.response_headers === undefined, "列表行不带响应头");
-
-      const detail = await getJson(`${bfBase}/api/sessions/${BF_SID}/requests?seq=1`);
-      assertEqual(detail.status, 200, "请求详情接口状态码");
-      const request = detail.json.request;
-      assertEqual(request.payload.authorization, "[redacted]", "详情里的 payload 已脱敏");
-      assertIncludes(request.payload.messages[0].content, "ACCEPT-REQUEST", "详情保留正文");
-      assertEqual(request.response_headers["x-ds-trace-id"], "trace-accept", "详情带响应头");
-      assertEqual(request.response_headers.authorization, "[redacted]", "响应头凭据已脱敏");
-      assertEqual(request.correlation, "serial_assumed", "关联方式");
-      assertEqual(request.turn_usage.cacheRead, 33, "usage 来自关联 Turn 的助手消息");
-      assertEqual(request.turn_usage.cacheWrite, 44, "缓存写入");
-      assertEqual(request.turn_usage.cost.total, 0.043, "usage 里的成本明细");
-
-      const cursor = await getJson(`${bfBase}/api/sessions/${BF_SID}/cursor`);
-      assertEqual(cursor.status, 200, "会话游标接口状态码");
-      assertEqual(cursor.json.request_seq_max, 1, "库里已用的最大请求序号");
-      assertEqual(cursor.json.run_seq_max, 9, "库里已用的最大运行序号");
-
-      const missing = await fetch(`${bfBase}/api/sessions/${BF_SID}/requests?seq=999`);
-      assertEqual(missing.status, 404, "不存在的请求 404");
-      const badSeq = await fetch(`${bfBase}/api/sessions/${BF_SID}/requests?seq=abc`);
-      assertEqual(badSeq.status, 400, "非法 seq 400");
-
-      const sessionPage = await fetch(`${bfBase}/sessions/${BF_SID}`);
-      const sessionHtml = await sessionPage.text();
-      assertEqual(sessionPage.status, 200, "会话详情页状态码");
-      assertIncludes(sessionHtml, "时间线", "标签条里有时间线");
-      assertIncludes(sessionHtml, "请求", "标签条里有请求");
-      assertIncludes(sessionHtml, "accept-model", "请求行显示模型");
-      assertIncludes(sessionHtml, `/sessions/${BF_SID}/requests/1`, "请求行链到详情页");
-
-      const requestPage = await fetch(`${bfBase}/sessions/${BF_SID}/requests/1`);
-      const requestHtml = await requestPage.text();
-      assertEqual(requestPage.status, 200, "请求详情页状态码");
-      assertIncludes(requestHtml, "Payload", "详情页有 payload 标签");
-      assertIncludes(requestHtml, "ACCEPT-REQUEST", "首屏就带 payload 预览");
-      assertIncludes(requestHtml, "[redacted]", "首屏显示的是脱敏后的值");
-      assertIncludes(requestHtml, "111", "首屏有输入 token");
-      assertIncludes(requestHtml, "0.04", "首屏有成本");
-
-      return `列表 1 行：token 111 / 222、成本 0.043 来自关联 Turn；详情有脱敏 payload 与响应头；页面与接口 200，缺请求 404、非法 seq 400`;
-    });
-
-    // ── 档 A 续：M3-4 工具列表与详情 ─────────────────────────────────────
-    await checks.check("A25", "工具列表与详情：按运行 / Turn 关联，参数、结果、部分结果按需取", async () => {
-      const posted = await postBatch(bfBase, bfToken, {
-        protocol: 2,
-        probe_version: "0.2.0",
-        dropped_count: 0,
-        queue_depth: 0,
-        records: [
-          {
-            kind: "tool_call",
-            tool_call_id: "accept-tool-1",
-            session_id: BF_SID,
-            parent_tool_call_id: null,
-            tool_name: "bash",
-            args: { command: "echo ACCEPT-TOOL" },
-            result: { role: "toolResult", content: [{ type: "text", text: "ACCEPT-TOOL-OUTPUT" }] },
-            partial_result: { role: "toolResult", content: [{ type: "text", text: "ACCEPT-TOOL-PARTIAL" }] },
-            is_error: false,
-            duration_ms: 42,
-            started_at: "2026-10-19T08:11:00.000Z",
-            ended_at: "2026-10-19T08:11:00.042Z",
-            run_seq: 9,
-            turn_index: 1,
-          },
-          {
-            kind: "tool_call",
-            tool_call_id: "accept-tool-2",
-            session_id: BF_SID,
-            parent_tool_call_id: null,
-            tool_name: "read",
-            args: { path: "docs/prd-v0.2.md" },
-            result: { role: "toolResult", content: [{ type: "text", text: "ACCEPT-TOOL-ERROR" }], isError: true },
-            partial_result: null,
-            is_error: true,
-            duration_ms: 7,
-            started_at: "2026-10-19T08:11:01.000Z",
-            ended_at: "2026-10-19T08:11:01.007Z",
-            run_seq: 9,
-            turn_index: 1,
-          },
-        ],
-      });
-      assertEqual(posted.status, 200, "写入工具调用的状态码");
-
-      const list = await getJson(`${bfBase}/api/sessions/${BF_SID}/tools`);
-      assertEqual(list.status, 200, "工具列表接口状态码");
-      // 回填的会话文件里已经有 1 次 read，本次再写 2 次
-      assertEqual(list.json.total, 3, "工具总数");
-      assertEqual(list.json.count, 3, "工具列表行数");
-      const success = list.json.tools.find((tool) => tool.tool_call_id === "accept-tool-1");
-      const failure = list.json.tools.find((tool) => tool.tool_call_id === "accept-tool-2");
-      assert(success && failure, "两条工具调用都在列表里");
-      assertEqual(success.tool_name, "bash", "工具名");
-      assertEqual(success.run_seq, 9, "运行序号");
-      assertEqual(success.turn_index, 1, "Turn 序号");
-      assertEqual(success.is_error, 0, "成功标记");
-      assertEqual(success.duration_ms, 42, "耗时");
-      assert(success.args_bytes > 0, "参数字节数");
-      assertIncludes(success.args_preview, "ACCEPT-TOOL", "参数预览");
-      assert(success.args === undefined, "列表行不带完整参数");
-      assert(success.result === undefined, "列表行不带结果");
-      assertEqual(failure.is_error, 1, "失败标记");
-
-      const detail = await getJson(`${bfBase}/api/sessions/${BF_SID}/tools?call=accept-tool-1`);
-      assertEqual(detail.status, 200, "工具详情接口状态码");
-      assertEqual(detail.json.tool.args.command, "echo ACCEPT-TOOL", "完整参数");
-      assertIncludes(detail.json.tool.result.content[0].text, "ACCEPT-TOOL-OUTPUT", "完整结果");
-      assertIncludes(detail.json.tool.partial_result.content[0].text, "ACCEPT-TOOL-PARTIAL", "部分结果");
-      const missing = await fetch(`${bfBase}/api/sessions/${BF_SID}/tools?call=accept-tool-missing`);
-      assertEqual(missing.status, 404, "不存在的工具调用 404");
-
-      const sessionPage = await fetch(`${bfBase}/sessions/${BF_SID}`);
-      const sessionHtml = await sessionPage.text();
-      assertIncludes(sessionHtml, "工具", "会话页有工具标签");
-      assertIncludes(sessionHtml, "bash", "工具行显示工具名");
-      assertIncludes(sessionHtml, `/sessions/${BF_SID}/tools/accept-tool-1`, "工具行链到详情页");
-      assertIncludes(sessionHtml, "ACCEPT-TOOL", "工具行显示参数预览");
-
-      const toolPage = await fetch(`${bfBase}/sessions/${BF_SID}/tools/accept-tool-1`);
-      const toolHtml = await toolPage.text();
-      assertEqual(toolPage.status, 200, "工具详情页状态码");
-      assertIncludes(toolHtml, "echo ACCEPT-TOOL", "首屏显示完整参数");
-      assertIncludes(toolHtml, "Turn 1", "首屏显示 Turn");
-      assertIncludes(toolHtml, `/sessions/${BF_SID}/requests/1`, "同 Turn 的请求链接");
-      assertIncludes(toolHtml, "成功", "成功徽标");
-
-      const errorDetail = await getJson(`${bfBase}/api/sessions/${BF_SID}/tools?call=accept-tool-2`);
-      assertEqual(errorDetail.status, 200, "失败工具详情接口状态码");
-      assertEqual(errorDetail.json.tool.is_error, 1, "失败标记");
-      assertIncludes(errorDetail.json.tool.result.content[0].text, "ACCEPT-TOOL-ERROR", "失败结果文本");
-      const errorPage = await fetch(`${bfBase}/sessions/${BF_SID}/tools/accept-tool-2`);
-      const errorHtml = await errorPage.text();
-      assertEqual(errorPage.status, 200, "失败工具详情页状态码");
-      assertIncludes(errorHtml, "失败", "失败徽标");
-
-      return `列表 3 行（含回填 1 条）：bash / read，run 9 / Turn 1；详情有完整参数、结果与部分结果；页面与接口 200，缺调用 404`;
-    });
-
-    // ── 档 A 续：M3-5 token 与成本汇总 ───────────────────────────────────
-    await checks.check("A26", "用量汇总：会话级与 Turn 级 token / 缓存 / 成本口径一致", async () => {
-      const payload = await getJson(`${bfBase}/api/sessions/${BF_SID}/turns`);
-      assertEqual(payload.status, 200, "Turn 列表接口状态码");
-      const turns = payload.json.turns ?? [];
-      const usage = payload.json.usage;
-      assert(usage, "接口应返回会话级 usage");
+    // ── 档 A 续：用量汇总口径 ───────────────────────────────────────────
+    await checks.check("A25", "用量汇总：会话级与 Turn 级 token / 缓存 / 成本口径一致", async () => {
+      const stream = await getJson(`${bfBase}/api/session?id=${BF_SID}`);
+      const data = stream.json.data;
+      const turns = data.turns ?? [];
 
       const sum = (key) => turns.reduce((total, turn) => total + (typeof turn[key] === "number" ? turn[key] : 0), 0);
-      assertEqual(usage.tokens_in, sum("tokens_in"), "会话输入 = Turn 输入之和");
-      assertEqual(usage.tokens_out, sum("tokens_out"), "会话输出 = Turn 输出之和");
-      assertEqual(usage.cache_read, sum("cache_read"), "会话缓存读取 = Turn 缓存读取之和");
-      assertEqual(usage.cache_write, sum("cache_write"), "会话缓存写入 = Turn 缓存写入之和");
-      assert(Math.abs(usage.cost - sum("cost")) < 1e-9, "会话成本 = Turn 成本之和");
+      const session = data.session;
+      assertEqual(session.tokens_in, sum("tokens_in"), "会话输入 = Turn 输入之和");
+      assertEqual(session.tokens_out, sum("tokens_out"), "会话输出 = Turn 输出之和");
+      assertEqual(session.cache_read, sum("cache_read"), "会话缓存读取 = Turn 缓存读取之和");
+      assertEqual(session.cache_write, sum("cache_write"), "会话缓存写入 = Turn 缓存写入之和");
+      assert(Math.abs(session.cost - sum("cost")) < 1e-9, "会话成本 = Turn 成本之和");
 
-      // 合成文件 bf-a1：11 / 22 / R33 / W44 / $0.05；A15 的 bf-a2：5 / 6 / 无缓存 / $0.01；
-      // A20 的 bf-a3：7 / 8 / 无缓存 / $0.003；A24 的 Turn：111 / 222 / R33 / W44 / $0.043
-      assertEqual(usage.tokens_in, 134, "输入 token 汇总");
-      assertEqual(usage.tokens_out, 258, "输出 token 汇总");
-      assertEqual(usage.cache_read, 66, "缓存读取汇总");
-      assertEqual(usage.cache_write, 88, "缓存写入汇总");
-      assert(Math.abs(usage.cost - 0.106) < 1e-9, "成本汇总");
+      // 合成文件 bf-a1：11 / 22 / R33 / W44 / $0.05；A17 的 bf-a2：5 / 6 / 无缓存 / $0.01；
+      // A21 的 bf-a3：7 / 8 / 无缓存 / $0.003
+      assertEqual(session.tokens_in, 23, "输入 token 汇总");
+      assertEqual(session.tokens_out, 36, "输出 token 汇总");
+      assertEqual(session.cache_read, 33, "缓存读取汇总");
+      assertEqual(session.cache_write, 44, "缓存写入汇总");
+      assert(Math.abs(session.cost - 0.063) < 1e-9, "成本汇总");
 
-      const a24Turn = turns.find((turn) => turn.run_seq === 9 && turn.turn_index === 1);
-      assert(a24Turn, "A24 的 Turn 在列表里");
-      assertEqual(a24Turn.cache_read, 33, "Turn 级缓存读取来自 usage");
-      assertEqual(a24Turn.cache_write, 44, "Turn 级缓存写入来自 usage");
-      const backfillTurn = turns.find((turn) => turn.run_seq === 1 && turn.turn_index === 0);
+      const backfillTurn = turns.find((turn) => turn.message_entry_id === "bf-a1");
       assert(backfillTurn, "回填 Turn 在列表里");
       assertEqual(backfillTurn.cache_read, 33, "回填 Turn 的缓存读取");
       assertEqual(backfillTurn.cache_write, 44, "回填 Turn 的缓存写入");
 
-      const page = await fetch(`${bfBase}/sessions/${BF_SID}`);
-      const html = await page.text();
-      assertEqual(page.status, 200, "会话详情页状态码");
-      assertIncludes(html, "缓存读取", "顶部有缓存读取指标");
-      assertIncludes(html, "缓存写入", "顶部有缓存写入指标");
-      assertIncludes(html, "R 66", "会话级缓存读取显示为 66");
-      assertIncludes(html, "W 88", "会话级缓存写入显示为 88");
-      assertIncludes(html, "$ 0.11", "会话级成本显示为 0.11");
-
-      return `会话 134 / 258 / R66 / W88 / $0.106；Turn 级缓存 33 / 44；顶部状态条与接口一致`;
+      return `会话 23 / 36 / R33 / W44 / $0.063；与 Turn 级之和一致`;
     });
+
+    // ── 档 A 续：保留期清理与状态自愈 ───────────────────────────────────
+    // 这两项要直接写库，必须在服务停掉之后做（服务端进程还开着同一个库，写连接会拿不到锁）。
   } finally {
     await bfServer.stop();
+  }
+
+  // 服务已停，可以直接写临时库了
+  try {
+    await checks.check("A26", "保留期：过期 payload 被清空、事件被删除，元信息留着", async () => {
+      const { openDb } = await import("../../src/lib/db.ts");
+      const { applyRetention } = await import("../../src/lib/retention.ts");
+      const writable = openDb(join(bfDataDir, "observer.db"));
+      try {
+        // 造两条 8 天前的数据
+        const old = "2026-10-01T00:00:00.000Z";
+        writable
+          .prepare(
+            `INSERT INTO messages (session_id, entry_id, parent_id, kind, role, timestamp, entry_index, text, payload)
+             VALUES (?, 'old-entry', NULL, 'message', 'user', ?, 900, '旧消息', '{"a":1}')`,
+          )
+          .run(BF_SID, old);
+        writable
+          .prepare(
+            `INSERT INTO events (event_id, session_id, layer, event_type, payload, occurred_at, received_at)
+             VALUES ('old-event', ?, 'agent', 'agent_settled', '{}', ?, ?)`,
+          )
+          .run(BF_SID, old, old);
+        const beforeRows = writable.prepare("SELECT COUNT(*) AS n FROM messages").get().n;
+
+        // 保留期是 7 天：把「现在」推到 8 天后
+        const shifted = new Date(Date.now() + 8 * 24 * 60 * 60 * 1000);
+        const outcome = applyRetention(writable, shifted);
+        assert(outcome.messages >= 1, "过期条目的 payload 应被清空");
+        assert(outcome.events >= 1, "过期事件应被删除");
+
+        const oldRow = writable
+          .prepare("SELECT payload, text FROM messages WHERE entry_id = 'old-entry'")
+          .get();
+        assertEqual(oldRow.payload, '{"deleted":true}', "过期条目的 payload");
+        assertEqual(oldRow.text, "旧消息", "摘要留着");
+        assertEqual(
+          writable.prepare("SELECT COUNT(*) AS n FROM messages").get().n,
+          beforeRows,
+          "行不会被删（删行会让时间线的行号对不上）",
+        );
+        assertEqual(
+          writable.prepare("SELECT COUNT(*) AS n FROM events WHERE event_id = 'old-event'").get().n,
+          0,
+          "过期事件整行删除",
+        );
+      } finally {
+        writable.close();
+      }
+      return "过期条目的 payload 清空为 {deleted:true}、行保留；过期事件整行删除；元信息不变";
+    });
+
+    await checks.check("A27", "状态自愈：文件已不存在的会话不再停在「进行中」", async () => {
+      const { openDb } = await import("../../src/lib/db.ts");
+      const { endSessionsWithoutFile } = await import("../../src/lib/session-state.ts");
+      const writable = openDb(join(bfDataDir, "observer.db"));
+      try {
+        writable
+          .prepare(
+            `INSERT INTO sessions (session_id, cwd, file_path, state, source, last_activity_at)
+             VALUES ('orphan-active', '/tmp/p', '/tmp/definitely-not-here.jsonl', 'active', 'live', ?)`,
+          )
+          .run(new Date().toISOString());
+
+        const outcome = endSessionsWithoutFile(writable, { exists: () => false });
+        assert(outcome.ended.includes("orphan-active"), "文件不在的 active 会话应被改成 ended");
+        const state = writable
+          .prepare("SELECT state FROM sessions WHERE session_id = 'orphan-active'")
+          .get();
+        assertEqual(state.state, "ended", "状态推进到 ended");
+
+        // 幂等：再跑一次不再改
+        const again = endSessionsWithoutFile(writable, { exists: () => false });
+        assert(!again.ended.includes("orphan-active"), "重复执行是幂等的");
+      } finally {
+        writable.close();
+      }
+      return "文件已不存在的 active 会话 → ended；重复执行幂等";
+    });
+  } catch (error) {
+    console.error(`\n验收中断：${error.message}`);
+    process.exitCode = 1;
   }
 } catch (error) {
   console.error(`\n验收中断：${error.message}`);

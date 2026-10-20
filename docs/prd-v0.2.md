@@ -22,7 +22,8 @@
 | 事件清单 | 含不存在的 `session_switch`，缺 `agent_settled` 等 | 按 Pi 1.3.0 类型定义重写 |
 | 结束判断 | 静默窗口 | `agent_settled` |
 | 幂等 | 无 | `messageEntryId` / `toolCallId` / 探针事件 ID |
-| 流式写入 | 服务端缓冲 | 探针侧合并（D4），服务端 upsert |
+| 内容路径 | 事件推正文 + 文件回填，两条路各存一份 | **只有一条**：会话文件 → `messages.payload`；事件只补文件里没有的信息 |
+| 页面形态 | 会话列表页 + 独立详情页 + 消息树面板 | **单页**：左栏项目 / 会话，右栏时间线；详情用弹窗 |
 | 驱动 | better-sqlite3 | `node:sqlite`（D1） |
 | 历史解析 | 未定义 | 只消费完整行、检测重写、按 id 去重 |
 | 探针约束 | 未写 | 独立一节，含队列上限与丢弃计数（D5） |
@@ -33,13 +34,15 @@
 | 编号 | 决策 |
 |:--|:--|
 | C1 | 端口 `4173` |
-| C2 | 实时正文默认开启，可关闭 |
+| C2 | 不显示流式正文：正文只在会话文件里，生成中显示「生成中」 |
 | C3 | 看板自有库用 `node:sqlite` |
 | C4 | 不做会话删除、隐藏、重命名等写操作 |
 | C5 | payload 存脱敏后的全文（方案 A） |
 | C6 | payload 与事件只保留 7 天，到期自动清理，不设总量上限 |
 | C7 | 代码与文档纳入 git 版本控制 |
 | C8 | 应用形态 Next.js 16（App Router / Node Runtime）；`prototype/` 是设计产物，不作为产品代码 |
+| C9 | 看板是单页：`/` 左侧项目 / 会话，右侧时间线；请求与工具详情用弹窗 |
+| C10 | 内容在库里只有一份（`messages.payload`），不存第二份副本 |
 
 ---
 
@@ -120,12 +123,12 @@ Pi 的数据分散在两处，且没有统一界面：
 
 | 数据 | 来源 | 可得性 | 备注 |
 |:--|:--|:--|:--|
-| 会话、分支、消息全文 | 会话 JSONL | ✅ | 真相源 |
+| 会话、分支、消息全文 | 会话 JSONL | ✅ | 真相源；**唯一的内容副本** |
 | token、成本、模型、provider、耗时、响应 ID | 会话 JSONL 的 assistant message | ✅ | 含 `usage.cost` 明细 |
-| 生命周期事件 | 扩展事件 | ✅ | 实时 |
+| 生命周期事件 | 扩展事件 | ✅ | 实时；只补文件里没有的信息 |
 | 请求 payload | `before_provider_request` | ✅ | 需脱敏与体积上限 |
 | 响应状态码与 headers | `after_provider_response` | ✅ | 不含响应 body |
-| 响应正文 | `message_update` / `message_end` | ✅ | 流式增量或最终全文 |
+| 响应正文 | 会话 JSONL 的 assistant message | ✅ | 不走事件；文件是唯一来源 |
 | Durable 检查点 | — | ❌ | 本机不存在该运行时 |
 | 遥测 | `pi-telemetry` | ❌ | 进程内诊断，禁止包含 prompt 与 payload |
 
@@ -165,16 +168,17 @@ Pi 的数据分散在两处，且没有统一界面：
 
 - `before_provider_request`：拿到即将发送的 payload，可读不可改（返回 `undefined`）。
 - `after_provider_response`：状态码与响应头；在响应流被消费之前触发，因此拿不到完整 body。
-- 响应正文通过 `message_update`（流式增量）与 `message_end`（最终全文）获得。
+- 响应正文不走事件：它就是助手消息，在会话文件里，文件是唯一来源。
 
 ### 4.5 不可得与降级
 
 | 数据 | 情况 | 处理 |
 |:--|:--|:--|
-| 响应 body 原始字节 | 钩子不提供 | 用消息内容重建，并在界面标注"由流式事件重建" |
+| 响应 body 原始字节 | 钩子不提供 | 展示文件里的助手消息，不假装是原始响应体 |
 | 请求的 wire 级字节 | 只有结构化 payload | 展示结构化 payload，标注"序列化前" |
 | 请求与响应的强关联 | 没有共享请求 ID | 按会话内顺序配对，标注"按顺序关联" |
 | 探针启动前的事件 | 未订阅 | 回填兜底，界面标注"仅历史" |
+| 生成中的正文 | 事件里没有，也不从文件读半截 | 显示"生成中"占位，不显示流式正文 |
 
 ### 4.6 明确排除
 
@@ -199,6 +203,8 @@ Pi 的数据分散在两处，且没有统一界面：
 
 ### 5.2 清单
 
+**保留的事件**（协议 v3）：只推文件里没有的信息。
+
 | 事件 | 层 | 类型 | 探针订阅 | 用到的字段 |
 |:--|:--|:--|:--|:--|
 | `session_start` | Session | 通知 | ✅ | 会话路径、ID、cwd |
@@ -210,19 +216,24 @@ Pi 的数据分散在两处，且没有统一界面：
 | `agent_start` | Agent | 通知 | ✅ | 运行边界（runSeq 自增） |
 | `agent_end` | Agent | 通知 | ✅ | 本轮消息列表 |
 | `agent_settled` | Agent | 通知 | ✅ | `aborted`；**会话是否空闲以此为准** |
-| `turn_start` | Turn | 通知 | ✅ | `turnIndex`、`timestamp` |
-| `turn_end` | Turn | 转换 | ✅ | `turnIndex`、`messageEntryId`、`toolResultEntryIds`、`message`、`toolResults` |
-| `message_start` | Message | 通知 | ✅ | 消息角色与初始内容 |
-| `message_update` | Message | 通知 | ✅（可关） | 最新快照与增量类型 |
-| `tool_execution_start` | Tool | 通知 | ✅ | `toolCallId`、`toolName`、`args`、`parentToolCallId` |
-| `tool_execution_update` | Tool | 通知 | ✅ | `partialResult` |
-| `tool_execution_end` | Tool | 通知 | ✅ | `result`、`isError`、`durationMs` |
+| `turn_start` | Turn | 通知 | ✅ | 只记序号与时间，不推正文 |
+| `turn_end` | Turn | 转换 | ✅ | 只记序号与 usage，不推正文 |
+| `tool_execution_start` | Tool | 通知 | ✅ | `toolCallId`、`toolName`、`parentToolCallId` |
+| `tool_execution_end` | Tool | 通知 | ✅ | `toolCallId`、`isError`、`durationMs` |
 | `before_provider_request` | Provider | 转换 | ✅ | `payload` |
 | `after_provider_response` | Provider | 通知 | ✅ | `status`、`headers` |
 | `model_select` | Model | 通知 | ✅ | 新模型与来源 |
 | `thinking_level_select` | Model | 通知 | ✅ | 新等级 |
 
-说明：`turn_end` 是转换型事件，但它是 `messageEntryId` 的唯一来源，因此必须订阅；handler 返回 `undefined` 即为空操作。
+**不订阅的事件**（协议 v3 起停推）：
+
+| 事件 | 不订阅的理由 |
+|:--|:--|
+| `message_start` / `message_update` / `message_end` | 正文只在会话文件里。事件再推一份就成了第二份副本，两处会不一致 |
+| `tool_execution_update` | 部分结果只是执行过程的中间态；最终结果在文件里 |
+| `progress`（进度快照） | 它只是「这一轮还在写」的信号，用会话状态（`state=active`）表达更准确 |
+
+说明：`turn_end` 是转换型事件，handler 返回 `undefined` 即为空操作；它带出的 usage 用来填 `turns` 表的 token / 缓存 / 成本，正文仍以文件为准。
 
 ---
 
@@ -235,7 +246,6 @@ Pi 的数据分散在两处，且没有统一界面：
 │  probe 扩展（薄探针）                                 │
 │    ├─ pi.on(...) 订阅通知型事件                       │
 │    ├─ before_provider_request 取 payload（只读）      │
-│    ├─ 流式事件就地合并（D4）                          │
 │    ├─ 有界队列 + 丢弃计数（D5）                       │
 │    └─ 批量 HTTP POST 到 127.0.0.1:4173               │
 └───────────────────────┬──────────────────────────────┘
@@ -244,25 +254,26 @@ Pi 的数据分散在两处，且没有统一界面：
 │ Next.js 服务（127.0.0.1:4173，Node Runtime）          │
 │                                                      │
 │  POST /api/ingest      接收批量事件，upsert 入库       │
-│  GET  /api/sessions    读库                            │
-│  GET  /api/.../tree    读 JSONL（回填/校验）           │
+│  GET  /api/sessions    会话列表                        │
+│  GET  /api/session     单会话时间线（一次取全）        │
+│  GET  /api/detail      行详情（按需取全文）             │
 │  GET  /api/stream      SSE 推送                        │
 │                                                      │
 │  node:sqlite（./data/observer.db）                     │
 │    sessions / runs / turns / tool_calls /             │
-│    llm_requests / events / probe_status               │
+│    llm_requests / events / probe_status / messages    │
 └───────────────────────┬──────────────────────────────┘
                         │
 ┌───────────────────────▼──────────────────────────────┐
-│ 浏览器：会话列表 / 消息树 / 时间线 / 请求详情          │
+│ 浏览器：单页（左侧项目 / 会话，右侧时间线）            │
 └──────────────────────────────────────────────────────┘
 ```
 
 数据流有三条，互不混淆：
 
 1. **写**：只有 Next.js 服务写看板库。
-2. **读**：页面只读看板库；消息树可以从 JSONL 现解析或缓存。
-3. **实时**：探针推送 → 服务入库 → SSE → 浏览器。
+2. **读**：页面只读看板库；内容只有一份，就在 `messages.payload`。
+3. **实时**：探针推送 → 服务入库 → SSE → 浏览器；正文另有一条路——服务端每秒读会话文件补进 `messages.payload`。
 
 ---
 
@@ -284,19 +295,19 @@ Pi 的数据分散在两处，且没有统一界面：
 - 不调用 `pi.appendEntry()`、`pi.sendMessage()`、`pi.sendUserMessage()`、`pi.setActiveTools()` 等任何写或改的 API。
 - 不改 `event` 上的对象。
 
-### 7.3 流式合并（D4）
+### 7.3 正文只有一条路径
 
-高频事件不逐条转发。探针维护一张合并表：
+协议 v3 起，探针**不推正文**：
 
-- 键：`session_id + runSeq + turnIndex`。
-  `runSeq` 在每次 `agent_start` 自增，因为 `turnIndex` 每次运行都会归零；`runSeq` 跨 Pi 进程由会话游标继续，`--resume` 后不会从 1 重来。
-- 值：最新消息快照、`updateCount`、开始时间、当前字节数。
-- `message_update`：覆盖快照、计数 +1，**只写内存**。
-- 每 500 ms：把仍在进行中的记录作为进度快照推一次。
-- `turn_end`：写入最终消息、`messageEntryId`、工具结果，出队并删除。
-- `tool_execution_update` 同样处理，键用 `toolCallId`。
+- `message_start` / `message_update` / `message_end` 不订阅，也不再推送。
+- 正文、思考、工具参数与结果，全部来自会话文件；服务端在会话进行中每秒读一次文件，把新条目写进 `messages.payload`。
+- 探针只推文件里没有的信息：运行状态、工具起止、请求与响应、模型与思考等级的选择。
 
-开关：`probe.liveText`（默认开启）。关闭后只处理 `message_start` 与 `turn_end`，看板显示"生成中"，消息结束再出全文。
+这样做的直接后果：**同一份内容在库里只有一份**。实时事件与文件不会各存一份、也不会不一致；代价是生成中的文字要等文件写完才看得到（界面显示"生成中"占位）。
+
+> 旧版探针（协议 v2）会推 `message_update` 进度快照与 `message_end` 全文。服务端已升级到 v3，**旧探针的批次会被整批拒绝**，需要重新加载探针。
+
+### 7.4 有界队列（D5）
 
 ### 7.4 有界队列（D5）
 
@@ -310,7 +321,7 @@ Pi 的数据分散在两处，且没有统一界面：
 
 ### 7.5 推送与重试
 
-- 协议：HTTP POST `/api/ingest`，请求头带 `x-observer-token`。
+- 协议：HTTP POST `/api/ingest`，请求头带 `x-observer-token`；批次带 `protocol: 3`，版本不符整批拒绝。
 - 批量：默认 300 ms 或 50 条，先到者触发。
 - 服务未启动：不阻塞、不崩溃；按指数退避重试（1s → 2s → 5s → 10s，上限 30s）。
 - 响应非 2xx：视为失败，记录一次，不重放已丢弃的记录。
@@ -322,8 +333,6 @@ Pi 的数据分散在两处，且没有统一界面：
 |:--|:--|:--|
 | `PI_OBSERVER_URL` | `http://127.0.0.1:4173` | 服务基地址（推送与健康检查） |
 | `PI_OBSERVER_TOKEN_FILE` | `<repo>/data/token` | 令牌文件；相对探针文件位置，不受 Pi 的 cwd 影响 |
-| `PI_OBSERVER_LIVE_TEXT` | `1` | 是否推送流式正文 |
-| `PI_OBSERVER_PROGRESS_INTERVAL_MS` | `500` | 进度快照间隔 |
 | `PI_OBSERVER_BATCH_INTERVAL_MS` | `300` | 批量推送间隔 |
 | `PI_OBSERVER_BATCH_SIZE` | `50` | 队列达到多少条立即推送 |
 | `PI_OBSERVER_MAX_BATCH_RECORDS` | `200` | 单批最多条数 |
@@ -395,9 +404,10 @@ Pi 的数据分散在两处，且没有统一界面：
 | `message_entry_id` | TEXT UNIQUE | 来自 `turn_end`，持久且稳定 |
 | `started_at` / `ended_at` | TEXT | |
 | `stop_reason` / `thinking_level` | TEXT | |
-| `assistant_message` | TEXT | 最终消息 JSON |
-| `tool_results` | TEXT | 结果 JSON 数组 |
+| `assistant_message` | TEXT | 最终消息 JSON（v3 起不再写：正文以 `messages.payload` 为准） |
+| `tool_results` | TEXT | 结果 JSON 数组（v3 起不再写） |
 | `tokens_in` / `tokens_out` | INTEGER | 来自消息 `usage` |
+| `cache_read` / `cache_write` | INTEGER NULL | 来自消息 `usage`（v3 起独立成列） |
 | `cost` | REAL | 来自消息 `usage` |
 
 约束：`UNIQUE(session_id, message_entry_id)`。
@@ -410,13 +420,17 @@ Pi 的数据分散在两处，且没有统一界面：
 | `session_id` | TEXT | |
 | `parent_tool_call_id` | TEXT NULL | 嵌套调用 |
 | `tool_name` | TEXT | |
-| `args` | TEXT | |
-| `result` | TEXT | 最终结果 |
-| `partial_result` | TEXT | 进行中的部分结果 |
+| `args` | TEXT | v3 起不再写：参数在助手条目的 `toolCall.arguments` 里 |
+| `result` | TEXT | v3 起不再写：结果在 toolResult 条目里 |
+| `partial_result` | TEXT | 进行中的部分结果（v3 起不再写） |
 | `is_error` | INTEGER | |
 | `duration_ms` | INTEGER NULL | |
 | `started_at` / `ended_at` | TEXT | |
-| `run_seq` / `turn_index` | INTEGER NULL | 工具执行时所在的运行 / Turn（M3-4 起写入；用于按 Turn 筛选与详情关联） |
+| `run_seq` / `turn_index` | INTEGER NULL | 工具执行时所在的运行 / Turn（用于按 Turn 筛选与详情关联） |
+| `entry_id` | TEXT NULL | 助手消息条目 id（参数所在；由文件同步器补写） |
+| `result_entry_id` | TEXT NULL | toolResult 条目 id（结果所在；由文件同步器补写） |
+
+**存储去重（v3 的核心约定）**：正文、思考、工具参数与结果都只在 `messages.payload` 里存一份。`turns` 与 `tool_calls` 只留标量、时间与指向 `messages` 的引用；查询时按 `entry_id` / `result_entry_id` join 出来。旧行的 `args` / `result` / `assistant_message` 仍在（7 天保留期内可查），查询用 `COALESCE` 回退。
 
 **llm_requests**
 
@@ -451,7 +465,7 @@ Pi 的数据分散在两处，且没有统一界面：
 | `id` | INTEGER PK | |
 | `event_id` | TEXT UNIQUE | 探针生成，用于幂等 |
 | `session_id` | TEXT | |
-| `layer` | TEXT | `session` / `agent` / `turn` / `message` / `tool` / `provider` |
+| `layer` | TEXT | `session` / `agent` / `tool` / `provider` |
 | `event_type` | TEXT | 事件名 |
 | `payload` | TEXT | 原始事件 JSON |
 | `occurred_at` | TEXT NULL | 事件自带时间 |
@@ -585,15 +599,17 @@ CREATE INDEX idx_jsonl_files_session ON jsonl_files(session_id);
 
 ### 9.3 实时与历史的拼接
 
-- **真相源是 JSONL**。实时事件用于"正在发生"的即时展示与活跃状态判断。
-- 同一会话的写入采用 upsert，键为持久 ID（`messageEntryId`、`toolCallId`），实时与回填会落到同一行。
+- **真相源是 JSONL**。实时事件只补文件里没有的信息：运行状态、工具起止、请求与响应、模型选择。
+- **内容只有一份**：`messages.payload` 是正文的唯一副本。实时路径不再推正文，所以不存在「两处各存一份、可能不一致」的情况。
+- **会话进行中每秒读一次文件**：`state=active` 的会话，服务端每秒扫一遍，文件有变化就把新条目写进 `messages.payload` 并广播 `session.updated`。文件没变时只做两次 stat，直接跳过。
+- 同一会话的写入采用 upsert，键为持久 ID（`entry_id`、`toolCallId`），实时与回填会落到同一行。
 - 会话结束（`agent_settled`）后 3 秒触发一次对账：重新读该文件，补齐实时丢失的部分，把 `source` 置为 `merged`。
 - `run_seq` 跨 Pi 进程由会话游标继续（M3-3 起）；它只用于展示分组，持久键仍是条目 ID。
 
 对账的落地约定（M2-5）：
 
 - **触发**：`POST /api/ingest` 落库成功之后，从这一批记录里找出 `agent_settled` / `session_shutdown` 的会话，各自排一个 3 秒定时器（同一会话只留一个，新的重置计时）。定时器 `unref`，不拖住进程退出；进程正好在这 3 秒里退出，下次启动扫描会重新读文件，不会漏。
-- **动作**：按已有的增量读取补读一次（文件没变就只做两次 stat），写 `sessions.last_reconciled_at = now` 并把 `source` 置为 `merged`（补读到新条目时 `backfillFile` 自己会置；文件自上次读过之后没变时它直接跳过、不碰 `source`，所以对账这一步必须自己写），然后广播一次 `session.updated`（带 `reconciled: true`）。页面只在看到 `reconciled: true` 时才重拉消息树——普通的 `session.updated` 每几百毫秒一次，不能都跟着重拉全量索引。
+- **动作**：按已有的增量读取补读一次（文件没变就只做两次 stat），写 `sessions.last_reconciled_at = now` 并把 `source` 置为 `merged`（补读到新条目时 `backfillFile` 自己会置；文件自上次读过之后没变时它直接跳过、不碰 `source`，所以对账这一步必须自己写），然后广播一次 `session.updated`（带 `reconciled: true`）。
 - **不写没核对过的时间**：会话没有文件（例如只在探针里出现过的测试会话）时返回 `found: false`、不写 `last_reconciled_at`，日志里记一条警告，不冒充「已对账」。
 - **对账不动状态**：状态归探针管（`active` / `idle` 见 §11.1）；只有 `session_shutdown` 这一种情况由服务端推进到 `ended`。
 - **幂等**：对账只是补读 + 写核对时间；重复对账不会产生重复条目（持久键 upsert），也不会把 `ended` 改回去。
@@ -609,16 +625,17 @@ CREATE INDEX idx_jsonl_files_session ON jsonl_files(session_id);
 
 | 方法 | 路径 | 用途 |
 |:--|:--|:--|
-| POST | `/api/ingest` | 探针批量写入，需要 `x-observer-token` |
+| POST | `/api/ingest` | 探针批量写入，需要 `x-observer-token`；协议版本不符整批拒绝 |
 | GET | `/api/health` | 探针可用性探测 |
 | GET | `/api/sessions` | 会话列表（分页、按项目筛选） |
-| GET | `/api/sessions/:id/tree` | 消息树 |
-| GET | `/api/sessions/:id/events` | 时间线（按层、类型、时间筛选） |
-| GET | `/api/sessions/:id/turns` | Turn 列表 |
-| GET | `/api/sessions/:id/llm-requests` | 请求列表与详情 |
+| GET | `/api/session?id=` | 单会话的时间线数据（消息、Turn、事件、工具、请求索引），一次取全 |
+| GET | `/api/session?id=&v=` | 同上；带版本号时，库里没变只回 `{unchanged:true}`，供每秒轮询用 |
+| GET | `/api/detail?session=&kind=&id=` | 行详情：正文 / 工具参数与结果 / 请求体与响应头 / 钩子入参 + 原始 JSON + 关联对象 |
+| POST | `/api/backfill` | 手动触发回填，需要令牌 |
+| GET | `/api/sessions/:id/cursor` | 会话游标（探针用来续接 `run_seq` / `request_seq`） |
 | GET | `/api/stream` | SSE |
 
-SSE 事件类型：`session.updated`、`turn.updated`、`tool.updated`、`request.updated`、`probe.status`。每条只带最小标识与版本号，页面按需二次拉取，避免把大对象塞进 SSE。
+SSE 事件类型：`session.updated`、`probe.status`。每条只带最小标识，页面按需二次拉取，避免把大对象塞进 SSE。
 
 ---
 
@@ -626,58 +643,56 @@ SSE 事件类型：`session.updated`、`turn.updated`、`tool.updated`、`reques
 
 `prototype/` 是**设计产物**：它定义视觉规范（配色、字号、间距、状态色语义）、信息结构与交互约定，也是本文档页面章节的图示。它不参与产品代码——产品界面按 Next.js + React 组件重写，只沿用其中的设计约定与 token 值。文件清单见 `prototype/README.md`。
 
-### 11.1 会话列表
+### 11.1 左侧会话列表
 
 - 按项目分组，按 `last_activity_at` 倒序。
 - 每行：会话短 ID、项目路径、消息数、Turn 数、最后活跃时间、状态标记。
 - 状态：`active`（最近有事件）、`idle`（`agent_settled` 且 60 秒无新事件）、`ended`（进程已退出）。
 
-落地约定（M2-4）：
+落地约定（M2-4 / R3）：
 
 - **分组与排序**：按 `cwd` 分组，组内与组间都按 `last_activity_at` 倒序；没有它就用 `started_at`，两者都没有的排最后（同一时间用会话 id 兜底，保证顺序稳定）。`cwd` 为空归到「（未知工作目录）」。
-- **每行的列**：会话短 ID（8 位）、首条用户消息摘要、状态、来源标记、消息数、Turn 数、工具数、输入 token、成本、最后活跃。
-- **摘要来源**：Pi 的会话文件头部没有会话名字段（实测只有 `cwd` / `id` / `timestamp` / `type` / `version`），所以摘要取这一会话第一条 `role=user` 正文（≤120 字符，行内再按列宽省略）；有 `name` 时优先用 `name`。没有用户消息就显示「—」，不编一个标题。
-- **四种显示状态**：在上面的三种之外加 `unreconciled`（未对账），只用于 `source=backfill` 的会话——它们从没收到过实时事件，`sessions.state` 是回填写的默认值，文件里没有进程或 agent 的状态，所以**不冒充「空闲」**。会话再跑一轮、完成一次对账后 `source` 变 `merged`，就按真实状态显示；只回填过、之后再没跑过的会话会一直是「未对账」——这是诚实的上限，不推定为「已结束」。状态筛选用的是显示状态，所以「空闲」不会筛出未对账的会话。
-- **概览条**（7 项）：活跃会话、会话总数、今日事件、今日 token、今日成本、累计丢弃、最近对账。
-  - 「今日」= 服务器本地时区的今天 0 点。
-  - 今日事件按 `events.received_at` 计数；回填不写事件，所以这项只反映实时活动。
-  - 今日 token / 成本按 `turns.started_at` 求和（实时与回填的 turn 都有开始时间）。
-  - 累计丢弃是探针自报的**累计值**（不是今日），与状态栏同源。
-  - 最近对账取 `MAX(sessions.last_reconciled_at)`；M2-5 之前一直是 NULL，显示「—」。
-- **规模**：列表最多取最近 200 个会话；库里更多时页头写明「只显示最近 N 个」，不静默截断。
+- **每行的内容**：首条用户消息摘要、状态点、会话短 ID、模型 Turn 数、最后活跃时间。摘要取这一会话第一条 `role=user` 正文（≤120 字符，行内再按列宽省略）；没有用户消息就显示「文件里还没有用户消息」，不编一个标题。
+- **搜索**：按摘要、项目路径、会话 ID、文件路径过滤（纯前端，不发请求）。
+- **四种显示状态**：在上面的三种之外加 `unreconciled`（未对账），只用于 `source=backfill` 的会话——它们从没收到过实时事件，`sessions.state` 是回填写的默认值，文件里没有进程或 agent 的状态，所以**不冒充「空闲」**。会话再跑一轮、完成一次对账后 `source` 变 `merged`，就按真实状态显示；只回填过、之后再没跑过的会话会一直是「未对账」——这是诚实的上限，不推定为「已结束」。
+- **规模**：列表最多取最近 500 个会话；库里更多时页头写明「只显示最近 N 个」，不静默截断。
 
-### 11.2 会话详情
+### 11.2 单页时间线
 
-顶部状态条：会话 ID、cwd、模型、状态、消息/Turn/工具计数、token 与成本。
+看板是**一个页面**：左侧是项目 / 会话列表，右侧直接是选中会话的时间线。没有独立的会话详情页，也没有独立的消息树面板——分支信息降级为行上的标记与筛选。
 
-左侧：消息树。从 JSONL 的 `id` / `parentId` 渲染，支持展开分叉、点击查看全文、高亮当前分支。
+顶部状态条：会话 ID、cwd、模型、状态、消息/Turn/工具计数、token、缓存与成本。
 
-消息树的落地约定（M2-3）：
+**时间线的落地约定（R3）**：
 
-- **数据**：来自 `messages` 表（会话文件全部条目，`kind` 区分类型）。渲染只取「索引行」——`entry_id` / `parent_id` / `kind` / `role` / `timestamp` / `entry_index` / 摘要前 200 字符 / payload 字节数；正文与原始条目在点开某个节点时才按需取（单条 payload 上限 512 KB，整页塞进来首屏就废了）。
-- **顺序**：一律按 `entry_index`（文件行号），同一秒的条目也能稳定排序。
-- **当前分支**：文件里最后一条条目（行号最大）到根的父链。Pi 的会话文件是追加写的，最后一条就是当前那条分支的叶；其余分支只标「非当前分支」，不说「已废弃」——没有依据。
-- **分叉起点**（绿色 ⑂）：自己不在当前分支、父节点却在。旁支的根（父为空）不算分叉，只算非当前分支。
-- **父条目连不上**（`parent_id` 指向没入库的条目，或行号比子条目更后）：当成新的根显示，并标「父条目不在索引里」；不假装它没有父，也不猜。
-- **图标**：user ▸ / assistant ▾ / system ◇ / toolResult → / compaction ▣（压缩摘要）；其余类型用中性 ▪，靠文字说明。
-- **落盘快照**：树里只有已经写进文件的条目。实时正在生成的消息要等它落盘、下一次回填/刷新才出现；树右上角有「刷新」手动重读索引。
-- **不编造**：库里条目超过渲染上限时，面板头如实写出「只渲染前 N 条，文件里共 M 条」。
+- **Turn 怎么分**：一个 UI Turn = 一条用户消息 + 到下一条用户消息之前的全部条目。数据库里的 `turns` 是模型 Turn（一个真实会话有 332 个模型 Turn、7 条用户消息），直接拿来分组会得到一堆没有用户提问的折叠块。首条用户消息之前的条目（会话头、系统提示、模型 / 思考等级切换）归入 `prelude`。
+- **倒序与分页**：Turn 倒序（最新在上），默认只渲染最近 20 个，底部「加载更早」每次再加 20 个；打开停在顶部，不滚到底。
+- **折叠**：Turn 默认折叠；会话进行中（`state=active`）的最后一个 Turn 自动展开一次，用户手动收起后不抢回来。
+- **分组筛选**：顶部按消息 / 会话 / 运行 / 工具 / 模型 / 探针六组过滤，外加「思考」与「其它分支」两个开关。开关写 `localStorage`，下次打开沿用。
+- **行内容**：用户 / 助手正文与思考、工具命令与结果预览、请求与响应两行、钩子事件、正在生成时的「生成中」占位。行尾的「⋯」打开行详情弹窗。
+- **分支标记**：不在当前分支上的行标「其它分支」，默认隐藏，可用开关打开；父条目连不上的标「孤立」。
+- **落盘快照**：时间线里只有已经写进文件的条目。正在生成的消息要等它落盘、下一次同步才出现。
+- **不编造**：库里数据超过取数上限时，顶部如实说明「只显示了最近的一部分」。
 
-右侧三个视图：
+**行详情弹窗**：三个标签页。
 
-1. **时间线**：Session / Agent / Turn / Message / Tool 事件按时间排列，Turn 作为可折叠容器。
-2. **请求**：每次模型请求一行（序号、provider / api / model、状态码、时间、输入 / 输出 token、payload 字节数、成本）；点进详情看脱敏 payload（按顶层键折叠）、响应头、usage 与关联信息；标注"序列化前"与"按顺序关联"。
-3. **工具**：按名称、Turn、是否出错筛选，展示参数、结果、耗时；点进详情看完整参数、最终结果与部分结果，并关联到同 Turn 的模型请求。
+1. **内容**：文件行给正文、思考、工具参数与结果；请求行给概览（序号 / provider / api / model / payload 字节 / 响应状态 / token）、脱敏后的请求体与响应头；钩子事件给钩子入参。
+2. **原始 JSON**：这一行对应的完整载荷。
+3. **关联**：这一行挂着的钩子事件、工具与请求。
 
-实时正文：开启时，正在生成的助手消息以半透明样式逐段出现，每 500 ms 更新一次；关闭时显示"生成中…"。
+来源在标题上标清楚：文件行标「来自文件」，钩子行标「钩子事件」，请求行标「钩子记录」。
 
 用量的落地约定（M3-5）：
 
 - **会话级**：输入 / 输出 token 与成本来自 `turns` 行求和；缓存读取 / 写入来自助手消息的 `usage.cacheRead` / `usage.cacheWrite`。顶部状态条显示这五项。
-- **Turn 级**：时间线每个 Turn 的头部显示该 Turn 的输入 / 输出 token、缓存读写与成本，数据与请求详情里的 usage 同源。
+- **Turn 级**：时间线每个 Turn 的头部显示该 Turn 的输入 / 输出 token 与成本；一个用户 Turn 下的多个模型 Turn 相加。
 - **口径一致**：实时路径与文件回填都写同一张 `turns` 表，所以两种来源不会各算一套；与 Pi 导出的 `usage` 的逐会话对照见 `tools/acceptance/real-pi/tree-compare.mjs`。
 
-### 11.3 探针状态
+### 11.3 主题
+
+亮 / 暗两套主题，默认暗色。顶栏按钮或 `D` 键切换，选择写 `localStorage["pi-observer-theme"]`，首屏绘制前生效（不闪一下）。亮色背景是**中性灰**（不是暖白 / 米黄）。
+
+### 11.4 探针状态
 
 页脚显示：最近一次推送时间、队列深度、累计丢弃数。丢弃数大于 0 时高亮。
 
@@ -732,9 +747,9 @@ pi --extension /absolute/path/to/pi-observer/ext
 - Pi 侧无可感知卡顿（连续两轮对话的响应时间与未装探针时相比偏差不超过 10%）。
 - 强杀服务端 30 秒后重启，探针不崩溃；恢复后新事件继续入库；`probe_status.dropped_count` 可查。
 
-### M2 历史与消息树
+### M2 历史与分支
 
-内容：会话扫描与回填、JSONL 解析、消息树渲染、会话列表。
+内容：会话扫描与回填、JSONL 解析、当前分支判定、会话列表。
 
 验收：
 
@@ -742,9 +757,9 @@ pi --extension /absolute/path/to/pi-observer/ext
 - 在 Pi 正在写入时读取，不出现整文件解析失败。
 - 人为把会话文件截短（模拟重写），回填逻辑检测到并重读，不产生重复条目。
 
-### M3 请求面板
+### M3 请求与用量
 
-内容：`before_provider_request` / `after_provider_response` 接入、脱敏、请求列表与详情。
+内容：`before_provider_request` / `after_provider_response` 接入、脱敏、请求与工具的取数、token 与成本汇总。
 
 验收：
 
@@ -753,9 +768,23 @@ pi --extension /absolute/path/to/pi-observer/ext
 - 记录中不含 `authorization` 或 API key。
 - 记录的 `payload_bytes` 与触发时打印的原始长度一致；超过上限时 `payload_truncated` 为 1。
 - 状态码与响应头可见。
-- 会话详情页能切换到请求视图；列表行显示序号、模型、状态、时间、token、payload 字节与成本；详情页显示脱敏 payload、响应头、usage（含缓存读写）与关联的 run / Turn。
-- 会话详情页能切换到工具视图；列表显示工具名、参数预览、Turn、耗时、成功 / 失败与开始时间；详情页显示完整参数、最终结果、部分结果，并关联到同 Turn 的模型请求。
-- 会话顶部显示输入 / 输出 token、缓存读取 / 写入与成本；时间线 Turn 头显示同一 Turn 的 token、缓存与成本；与 JSONL 中 assistant 消息的 `usage` 求和一致。
+- 时间线里请求与响应各占一行（`provider →` / `provider ←`）；行详情弹窗显示脱敏 payload、响应头、usage（含缓存读写）与关联的 run / Turn。
+- 时间线里工具单独成行，显示工具名、参数预览、耗时与成功 / 失败；行详情弹窗显示完整参数、最终结果，并关联到助手条目与结果条目。
+- 会话顶部显示输入 / 输出 token、缓存读取 / 写入与成本；时间线 Turn 头显示同一 Turn 的 token 与成本；与 JSONL 中 assistant 消息的 `usage` 求和一致。
+
+### M3-6 单页重构（本轮）
+
+内容：单页外壳、按用户消息分组的 Turn 行模型、倒序与分页、分组筛选、行详情弹窗、亮暗主题、每秒轮询的版本号判重。
+
+验收：
+
+- 只有一个页面：左侧项目 / 会话，右侧时间线；没有独立的会话详情页与消息树面板。
+- Turn 倒序，默认最近 20 个，底部「加载更早」每次再加 20 个；打开停在顶部。
+- Turn 默认折叠；进行中的 Turn 自动展开。
+- 顶部分组筛选与亮暗主题的开关写 `localStorage`，刷新后保持。
+- 每行「⋯」打开弹窗，内容 / 原始 JSON / 关联三个标签页。
+- 活跃会话每秒轮询；库里没变时只回 `unchanged`，不重传整套数据。
+- 协议 v3：探针不推正文；同一份内容在库里只有一份。
 
 ### M4 打磨
 
@@ -803,14 +832,23 @@ pi --extension /absolute/path/to/pi-observer/ext
 
 ## 附录 B 事件字段速查
 
+**协议 v3 推的字段**（只推文件里没有的信息）：
+
 | 事件 | 关键字段 |
 |:--|:--|
-| `turn_end` | `turnIndex`、`messageEntryId`、`toolResultEntryIds`、`message`、`toolResults` |
-| `tool_execution_start` | `toolCallId`、`toolName`、`args`、`parentToolCallId` |
-| `tool_execution_update` | `toolCallId`、`partialResult` |
-| `tool_execution_end` | `toolCallId`、`result`、`isError`、`durationMs` |
-| `message_start` / `message_update` / `message_end` | `message`；`message_update` 另有 `assistantMessageEvent` |
+| `turn_end` | `turnIndex`、`stopReason`、助手消息的 `usage`（token / 缓存 / 成本） |
+| `tool_execution_start` | `toolCallId`、`toolName`、`parentToolCallId` |
+| `tool_execution_end` | `toolCallId`、`isError`、`durationMs` |
 | `before_provider_request` | `payload` |
 | `after_provider_response` | `status`、`headers` |
 | `agent_settled` | `aborted` |
 | `session_tree` | `newLeafId`、`oldLeafId`、`summaryEntry` |
+
+**v3 不再推的字段**（内容在会话文件里）：
+
+| 事件 | 原字段 | 现在在哪 |
+|:--|:--|:--|
+| `message_start` / `message_update` / `message_end` | `message`、`assistantMessageEvent` | 会话文件的 `message` 条目 |
+| `tool_execution_start` | `args` | 助手条目 `content` 里的 `toolCall.arguments` |
+| `tool_execution_end` | `result` | toolResult 条目 |
+| `tool_execution_update` | `partialResult` | 不再采集 |

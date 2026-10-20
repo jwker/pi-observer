@@ -47,7 +47,7 @@
 ### 1.2 选 B 的理由（记录决策依据）
 
 1. **原型是设计产物，不作为开发产品**。方案 A 的最大卖点是「原型 HTML 直接变成产品界面」，这条不成立，方案 A 因此失去主要优势。
-2. **界面交互会变重**。会话详情本身就有多层筛选、可折叠消息树、标签页、实时正文、详情抽屉；用组件表达比模板函数更省心。
+2. **界面交互会变重**。时间线本身就有分层筛选、可折叠的 Turn、分页、行详情弹窗、亮暗主题；用组件表达比模板函数更省心。
 3. **与 PRD 原文一致**，文档与实现不再有两套说法，也不需要为 T1 维护一段「偏离说明」。
 4. 本机网络与工具链完备（npm registry 可达，实测见附录 C），装依赖是取舍问题，不是可行性问题。
 
@@ -70,15 +70,17 @@
 pi-observer/
   src/
     app/                        路由与页面（App Router）
-      layout.tsx
-      page.tsx                  会话列表（PRD §11.1）
-      sessions/[id]/page.tsx    会话详情：树 + 时间线 / 请求 / 工具（§11.2）
-      probe/page.tsx            探针状态（§11.3）
+      layout.tsx                壳：主题引导脚本 + 顶栏 + 状态栏
+      page.tsx                  单页：左栏项目 / 会话 + 右侧时间线（PRD §11.1、§11.2）
       api/
         ingest/route.ts         POST 批量接收（令牌）
         stream/route.ts         GET  SSE
-        sessions/route.ts       读取接口
-        ...
+        sessions/route.ts       会话列表
+        session/route.ts        单会话时间线数据（一次取全 + 版本号判重）
+        detail/route.ts         行详情（正文 / 参数 / 请求体 / 钩子入参 + 关联）
+        cursor/route.ts         会话游标（探针续接序号用）
+        backfill/route.ts       手动触发回填
+        health/route.ts         探针可用性探测
     components/                 界面组件（视觉按原型）
     lib/                        纯逻辑，不依赖 Next（可被 node --test 直接跑）
       config.ts                 配置与默认值
@@ -86,20 +88,22 @@ pi-observer/
       schema.ts                 建表与索引（内联 DDL，不用 .sql 文件）
       redact.ts                 脱敏黑名单
       ingest.ts                 校验 → 事务 → upsert
-      backfill.ts               JSONL 解析、重写检测、回填入库、对账
+      backfill.ts               JSONL 解析、重写检测、回填入库
+      session-sync.ts           活跃会话每秒跟进文件（server-only）
       reconcile.ts              agent_settled 后对账、session_shutdown → ended（定时器）
-      tree.ts                   消息树的父子结构、当前分支、过滤、图标（纯函数）
-      session-view.ts           会话列表的状态口径、分组排序、筛选（纯函数）
-      request-view.ts           请求状态色、payload 分段与 usage 读取（纯函数）
-      tool-view.ts              工具状态、筛选、参数摘要与结果文本（纯函数）
-      retention.ts              7 天清理 + 空间回收
+      stream.ts                 时间线行模型：用户 Turn 分组、当前分支、分页（纯函数）
+      tree.ts                   父子结构与当前分支判定（纯函数）
+      session-view.ts           会话列表的状态口径、分组排序（纯函数）
+      filters.ts                分组筛选的存档读写与容错（纯函数）
+      format.ts                 时间、token、成本、字节的格式化（纯函数）
+      queries.ts                所有 SQL 查询
       sse.ts                    订阅表与广播
       log.ts                    单行 JSON 日志
   ext/
     index.ts                    探针入口（Pi 直接加载，不参与 Next 构建）
     request.ts                  请求 payload 脱敏/截断、request_seq 与串行配对（纯逻辑）
     session-cursor.ts           request_seq / run_seq 的跨进程游标（data/session-cursor/）
-  probes/                       一次性测量脚本（已验证的测量代码）
+  tools/acceptance/             验收脚本（档 A 离线 + 档 B 真实 Pi）
   test/                         node --test 用例
   public/                       静态资源
   data/                         observer.db · token · session-cursor/（已在 .gitignore）
@@ -244,18 +248,21 @@ SSE 实现要点（已实测，附录 C.3）：
 
 ## 6. T6 前端渲染
 
-**结论**：React 组件 + App Router 真实 URL；界面按原型的设计规范重写。
+**结论**：React 组件 + App Router；**单页**，界面按原型的设计规范重写。
 
 | 项 | 做法 |
 |:--|:--|
-| 设计来源 | `prototype/`（设计产物）：色板、字号、间距、状态色语义、页面清单与信息结构 |
+| 设计来源 | `prototype/`（设计产物）：色板、字号、间距、状态色语义、信息结构与交互约定 |
 | 样式落地 | 把 `prototype/styles.css` 顶部的 `:root` tokens 原值搬到 `src/app/globals.css`，作为唯一来源；组件样式沿用原型的类命名习惯 |
-| 页面 | 多路由真实 URL（列表 / 会话 / 请求 / 工具 / JSONL / 探针），可收藏、可刷新、可直接打开 |
-| 数据 | 列表与详情用服务端取数（server component 直读 `src/lib`）；实时部分用客户端组件 + `EventSource` |
-| 新写 | 原型的 `app.js` 交互（标签页、开关芯片、筛选、树折叠、实时正文）重写为 React 状态与事件，**不复制粘贴** |
+| 页面 | **一个页面** `/`：左侧项目 / 会话列表，右侧时间线。请求与工具详情用弹窗，不另开路由 |
+| 会话选择 | `?session=<id>` 与当前会话同步：切换时 `pushState`（前进 / 后退可用），首屏补参，`popstate` 按 URL 切回 |
+| 数据 | 服务端组件直读 `src/lib` 取首屏数据并交给客户端组件；之后用客户端 fetch + SSE 增量更新 |
+| 新写 | 原型的 `app.js` 交互（筛选、Turn 折叠、分页、详情弹窗、亮暗主题）重写为 React 状态与事件，**不复制粘贴** |
 | 不做 | SPA 式客户端路由、CSS 框架、UI 组件库、图表库 |
 
-选择真实 URL 的理由：会话 / 请求 / 工具本身就是层级关系，URL 可以直接分享与收藏；SPA 路由在这个规模上只增加状态管理成本。
+**为什么改成单页**（R3 的决定）：会话 / 请求 / 工具原本各占一个路由，但它们其实是**同一条时间线上的不同行**。拆成多个页面后，用户的真实动作是「在时间线里上下找一行，点开看细节」——这在单页里是一步，在多页里是「记住在哪一页 → 切过去 → 再切回来」。多页还多出两处要同步的真相：`/sessions/:id/messages` 与 `/sessions/:id/events` 各自给一份数据，前端得决定用哪份。
+
+改成单页后，数据的唯一出口是 `GET /api/session?id=`（一次取全）与 `GET /api/detail`（按需取全文），页面不再需要多接口对齐。
 
 原型与产品的关系，一句话：**设计值照搬，代码重写**。改配色或宽度只需改 `prototype/styles.css` 的 `:root` 与 `--page-max` 并同步到 `globals.css`。
 
@@ -281,11 +288,11 @@ SSE 实现要点（已实测，附录 C.3）：
 | 运行器 | `node --test`（内置），断言用 `node:assert/strict` |
 | 文件 | `test/*.test.ts`，无需配置（已实测能直接跑 `.ts`，附录 A.4） |
 | 前提 | 被测模块放在 `src/lib/**`，且相对导入带 `.ts` 后缀（§3.2） |
-| 优先覆盖 | JSONL 5 条解析规则、幂等 upsert（同一 payload 写两次只有一行）、脱敏黑名单、7 天清理、SSE 帧格式、探针队列溢出与 `dropped_count` |
+| 优先覆盖 | JSONL 5 条解析规则、幂等 upsert（同一 payload 写两次只有一行）、脱敏黑名单、时间线行模型（用户 Turn 分组、当前分支、分页）、轮询版本号判重、筛选存档容错、SSE 帧格式、探针队列溢出与 `dropped_count` |
 | 类型检查 | `next typegen && tsc --noEmit`（框架自带，不额外引工具） |
 | 覆盖率 | `npm run coverage`（`node --test --experimental-test-coverage`，内置，不引依赖）。只统计被测试 import 的模块，`src/app/**` 与 `src/components/**` 不计入 |
 | 一次跑完 | `npm run check` = 单测 + 类型检查 + 构建 |
-| 端到端 | `npm run accept`：档 A 离线验收，26 项断言，跑在临时数据目录与空闲端口上，无副作用。`npm run verify` = `check` + `accept` |
+| 端到端 | `npm run accept`：档 A 离线验收，25 项断言，跑在临时数据目录与空闲端口上，无副作用。`npm run verify` = `check` + `accept` |
 | 真实 Pi | `tools/acceptance/real-pi/`：卡顿 A/B、强杀恢复、HMR、端到端延迟、消息数对照、写入时读取、请求采集。会花 token 或杀端口，详见该目录 README |
 | 不引 | vitest / jest。若将来真要为 React 组件写断言，再加 vitest，到那时再说 |
 
@@ -373,7 +380,8 @@ SSE 实现要点（已实测，附录 C.3）：
 | 会话旁 `*.meta.json` | 已卸载应用写的残留，不是 Pi 的数据 |
 | 任何写 Pi 的 API（`appendEntry` / `sendMessage` / `setActiveTools` …） | 只读原则（PRD §1.4） |
 | `before_provider_headers` / `tool_call` / `context` / `provider_stream_event` 订阅 | 拦截点或高开销点（PRD §5.1） |
-| 文件监听（`fs.watch`） | 不需要：回填由「启动扫描 + 进页面补读 + `agent_settled` 后对账」触发（PRD §9.1、§9.3） |
+| `message_start` / `message_update` / `message_end` / `tool_execution_update` 订阅 | 正文只在会话文件里；订阅它就等于存第二份副本（PRD §7.3） |
+| 文件监听（`fs.watch`） | 不需要：回填由「启动扫描 + 每秒同步 + 进页面补读 + `agent_settled` 后对账」触发（PRD §9.1、§9.3） |
 | Edge Runtime | 用不了 `node:sqlite` 与 `node:fs` |
 | 把原型代码当作产品代码 | 原型是设计产物；产品界面按 §6 重写 |
 | 用 Next 的 Server Action / 表单提交做写操作 | 看板只读，没有任何写入口 |

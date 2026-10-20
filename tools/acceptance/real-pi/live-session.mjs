@@ -120,7 +120,7 @@ try {
         });
         // 页面路径也要能在写入期间打开（进页面会触发补读）
         if (pageRead === null && sessionId !== null) {
-          const page = await fetch(`${base}/sessions/${encodeURIComponent(sessionId)}`);
+          const page = await fetch(`${base}/?session=${encodeURIComponent(sessionId)}`);
           pageRead = { status: page.status, bytes: (await page.text()).length };
         }
       }
@@ -167,10 +167,10 @@ try {
     ? (timeline.find((item) => item.t >= firstActive.t && item.state === "idle") ?? null)
     : null;
 
-  const events = await getJson(`${base}/api/sessions/${encodeURIComponent(sessionId)}/events?limit=2000`);
-  const rows = events.json?.events ?? [];
-  // 进度快照（message_progress）的 occurred_at 是「这一轮开始的时间」，不是快照产生的时间，
-  // 拿它算投递延迟会把整轮时长算进去。投递延迟只统计点事件。
+  const stream = await getJson(`${base}/api/session?id=${encodeURIComponent(sessionId)}`);
+  const rows = stream.json?.data?.events ?? [];
+  // 只统计点事件：进度快照的 occurred_at 是「这一轮开始的时间」，不是快照产生的时间，
+  // 拿它算投递延迟会把整轮时长算进去。
   const pointEvents = rows.filter((event) => event.event_type !== "message_progress");
   const latencies = pointEvents
     .map((event) => Date.parse(event.received_at) - Date.parse(event.occurred_at))
@@ -203,8 +203,8 @@ try {
     .filter((entry) => entry !== null && entry.type !== "session")
     .map((entry) => entry.id ?? null);
 
-  const ours = await getJson(`${base}/api/sessions/${encodeURIComponent(sessionId)}/messages?limit=20000`);
-  const ourIds = (ours.json?.messages ?? []).map((row) => row.entry_id);
+  const ours = await getJson(`${base}/api/session?id=${encodeURIComponent(sessionId)}`);
+  const ourIds = (ours.json?.data?.messages ?? []).map((row) => row.entry_id);
   const sameEntries = fileIds.length === ourIds.length && fileIds.every((id, index) => id === ourIds[index]);
 
   const result = {

@@ -12,10 +12,20 @@ export async function register(): Promise<void> {
   if (process.env.NEXT_RUNTIME !== "nodejs") return;
   if (process.env.NEXT_PHASE === "phase-production-build") return;
 
-  const [{ createBackfillContext, scanSessionsDir }, { log }, { startSessionSync }] = await Promise.all([
+  const [
+    { createBackfillContext, scanSessionsDir },
+    { log },
+    { startSessionSync },
+    { endSessionsWithoutFile },
+    { getDb },
+    { applyRetention, startRetentionJobs },
+  ] = await Promise.all([
     import("./lib/backfill.ts"),
     import("./lib/log.ts"),
     import("./lib/session-sync.ts"),
+    import("./lib/session-state.ts"),
+    import("./lib/db.ts"),
+    import("./lib/retention.ts"),
   ]);
 
   try {
@@ -34,6 +44,25 @@ export async function register(): Promise<void> {
   } catch (error) {
     // 扫不动不能拖垮服务：页面里的补读与实时探针都不依赖它
     log("error", "backfill", "启动扫描失败", { error: (error as Error).message });
+  }
+
+  // 探针被强杀时收不到 agent_settled / session_shutdown，会话会永远停在「进行中」。
+  // 文件没了就说明会话不可能还在跑——启动时顺手把这类状态改回「已结束」。
+  try {
+    const outcome = endSessionsWithoutFile(getDb());
+    if (outcome.ended.length > 0) {
+      log("info", "state", "已修正过期状态", { count: outcome.ended.length });
+    }
+  } catch (error) {
+    log("warn", "state", "修正过期状态失败", { error: (error as Error).message });
+  }
+
+  // 保留期清理：payload 与事件只留 7 天（PRD §8.6）。启动时跑一次，之后每小时一次。
+  try {
+    applyRetention(getDb());
+    startRetentionJobs(getDb());
+  } catch (error) {
+    log("warn", "retention", "保留期清理失败", { error: (error as Error).message });
   }
 
   // 启动扫描之后开始每秒跟进活跃会话；已有循环时是幂等的。
