@@ -5,6 +5,15 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>pi-observer · 探针状态</title>
 <link rel="stylesheet" href="styles.css">
+<script>
+/* 在首屏绘制前应用主题，避免暗色闪一下 */
+(function () {
+  try {
+    var t = localStorage.getItem("pi-observer-theme");
+    if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+  } catch (e) {}
+})();
+</script>
 </head>
 <body data-page="probe">
 
@@ -12,13 +21,15 @@
   <div class="topbar-inner">
     <div class="brand"><span class="dot">●</span>pi-observer <span class="sub">只读</span></div>
     <nav class="nav">
-      <a href="index.html">会话列表</a>
-      <a href="session.html">会话详情</a>
+      <a href="index.html">应用</a>
       <a class="active" href="probe.html">探针状态</a>
       <a href="style-guide.html">设计规范</a>
     </nav>
     <div class="spacer"></div>
     <span class="probe-pill"><span class="pulse"></span>探针已连接 · 2 秒前</span>
+      <button class="btn ghost" data-theme-toggle title="切换亮色 / 暗色（D）" aria-pressed="false">
+        <span data-theme-icon>☾</span><span data-theme-label>暗色</span>
+      </button>
   </div>
 </div>
 
@@ -96,11 +107,11 @@
     <div class="rows">
       <div class="row head" style="grid-template-columns:220px 96px 80px 1fr"><span>事件</span><span>层</span><span>类型</span><span>订阅理由</span></div>
 
-      <div class="row" style="grid-template-columns:220px 96px 80px 1fr"><code>session_start</code><span class="etype session">session</span><span class="badge ok">订阅</span><span class="faint">建立队列与定时器，记录会话路径、cwd</span></div>
+      <div class="row" style="grid-template-columns:220px 96px 80px 1fr"><span class="nowrap"><code>session_start</code> / <code>session_shutdown</code></span><span class="etype session">session</span><span class="badge ok">订阅</span><span class="faint">建立队列与定时器，记录会话路径、cwd；关闭时收尾</span></div>
       <div class="row" style="grid-template-columns:220px 96px 80px 1fr"><span class="nowrap"><code>agent_start</code> / <code>agent_settled</code></span><span class="etype agent">agent</span><span class="badge ok">订阅</span><span class="faint">运行边界；runSeq 自增；终态判断以 settled 为准</span></div>
-      <div class="row" style="grid-template-columns:220px 96px 80px 1fr"><span class="nowrap"><code>turn_start</code> / <code>turn_end</code></span><span class="etype turn">turn</span><span class="badge ok">订阅</span><span class="faint">turn_end 是 <code>messageEntryId</code> 的唯一来源</span></div>
-      <div class="row" style="grid-template-columns:220px 96px 80px 1fr"><span class="nowrap"><code>message_start</code> / <code>_update</code></span><span class="etype message">message</span><span class="badge ok">订阅</span><span class="faint">实时正文，按 500 ms 合并后推送</span></div>
-      <div class="row" style="grid-template-columns:220px 96px 80px 1fr"><code>tool_execution_*</code><span class="etype tool">tool</span><span class="badge ok">订阅</span><span class="faint">参数、部分结果、最终结果、耗时、isError</span></div>
+      <div class="row" style="grid-template-columns:220px 96px 80px 1fr"><span class="nowrap"><code>turn_start</code> / <code>turn_end</code></span><span class="etype turn">turn</span><span class="badge ok">订阅</span><span class="faint">只记序号、时间和 usage；正文以会话文件为准</span></div>
+      <div class="row" style="grid-template-columns:220px 96px 80px 1fr"><span class="nowrap"><code>message_start</code> / <code>_update</code> / <code>_end</code></span><span class="etype message">message</span><span class="badge err">不订阅</span><span class="faint">正文只在会话文件里；订阅它就等于存第二份副本</span></div>
+      <div class="row" style="grid-template-columns:220px 96px 80px 1fr"><span class="nowrap"><code>tool_execution_start</code> / <code>_end</code></span><span class="etype tool">tool</span><span class="badge ok">订阅</span><span class="faint">起止时间、耗时、isError；参数与结果在文件里</span></div>
       <div class="row" style="grid-template-columns:220px 96px 80px 1fr"><code>before_provider_request</code><span class="etype provider">provider</span><span class="badge warn">订阅 · 转换</span><span class="faint">读取 payload，handler 返回 <code>undefined</code>，不修改请求</span></div>
       <div class="row" style="grid-template-columns:220px 96px 80px 1fr"><code>after_provider_response</code><span class="etype provider">provider</span><span class="badge ok">订阅</span><span class="faint">状态码与响应头</span></div>
       <div class="row" style="grid-template-columns:220px 96px 80px 1fr"><span class="nowrap"><code>tool_call</code> / <code>tool_result</code></span><span class="etype tool">tool</span><span class="badge err">不订阅</span><span class="faint">拦截点，抛错会阻断工具；只读看板没有必要</span></div>
@@ -117,16 +128,15 @@
       <div class="panel-head"><span>运行开关</span></div>
       <div class="panel-body">
         <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-          <span class="chip on"><span class="k">默认开</span>实时正文</span>
-          <span class="chip on cyan"><span class="k">500 ms</span>快照间隔</span>
+          <span class="chip on cyan"><span class="k">300 ms</span>批量间隔</span>
           <span class="chip on alt"><span class="k">开</span>丢弃计数上报</span>
         </div>
         <div class="faint" style="font-size:11px;margin-top:10px">
-          关闭实时正文后，探针只处理 <code>message_start</code> 与 <code>turn_end</code>：页面显示“生成中…”，消息结束再出全文，其余功能不受影响。
+          没有「实时正文」开关：正文只有一条路径（会话文件）。会话进行中时服务端每秒读一次文件，页面在写入完成前显示“生成中…”。
         </div>
         <div class="pre" style="margin-top:12px"><span class="hl-dim"># 环境变量</span>
-PI_OBSERVER_LIVE_TEXT=<span class="hl-num">1</span>
-PI_OBSERVER_SNAPSHOT_MS=<span class="hl-num">500</span>
+PI_OBSERVER_URL=<span class="hl-num">http://127.0.0.1:4173</span>
+PI_OBSERVER_BATCH_INTERVAL_MS=<span class="hl-num">300</span>
 PI_OBSERVER_QUEUE_RECORDS=<span class="hl-num">2000</span>
 PI_OBSERVER_QUEUE_BYTES=<span class="hl-num">67108864</span></div>
       </div>

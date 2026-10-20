@@ -5,6 +5,15 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>pi-observer · 工具调用</title>
 <link rel="stylesheet" href="styles.css">
+<script>
+/* 在首屏绘制前应用主题，避免暗色闪一下 */
+(function () {
+  try {
+    var t = localStorage.getItem("pi-observer-theme");
+    if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+  } catch (e) {}
+})();
+</script>
 </head>
 <body data-page="tool">
 
@@ -12,13 +21,15 @@
   <div class="topbar-inner">
     <div class="brand"><span class="dot">●</span>pi-observer <span class="sub">只读</span></div>
     <nav class="nav">
-      <a href="index.html">会话列表</a>
-      <a class="active" href="session.html">会话详情</a>
+      <a class="active" href="index.html">应用</a>
       <a href="probe.html">探针状态</a>
       <a href="style-guide.html">设计规范</a>
     </nav>
     <div class="spacer"></div>
     <span class="probe-pill"><span class="pulse"></span>探针已连接 · 2 秒前</span>
+      <button class="btn ghost" data-theme-toggle title="切换亮色 / 暗色（D）" aria-pressed="false">
+        <span data-theme-icon>☾</span><span data-theme-label>暗色</span>
+      </button>
   </div>
 </div>
 
@@ -26,7 +37,7 @@
 
   <div class="page-head">
     <div class="title">
-      <div class="crumb"><a href="index.html">会话列表</a> / <a href="session.html">01a149bf</a> / 工具调用</div>
+      <div class="crumb"><a href="index.html">应用</a> / <a href="index.html">01a149bf</a> / 工具调用</div>
       <h1><span style="color:var(--pink)">bash</span> · pnpm run dev</h1>
     </div>
     <div class="spacer"></div>
@@ -39,7 +50,7 @@
       <dl class="kv">
         <dt>toolCallId</dt><dd><code>call_01a149bf_0018</code></dd>
         <dt>父调用</dt><dd class="faint">无（顶层调用）</dd>
-        <dt>Turn</dt><dd><a href="session.html">Turn 10</a> · turnIndex 10</dd>
+        <dt>Turn</dt><dd><a href="index.html">Turn 10</a> · turnIndex 10</dd>
         <dt>开始</dt><dd>2026-10-19 21:04:42</dd>
       </dl>
       <dl class="kv">
@@ -120,8 +131,8 @@ Command exited with code 1</div>
     <div data-panel="link">
       <div class="panel-body">
         <dl class="kv" style="gap:8px 18px">
-          <dt>会话</dt><dd><a href="session.html">01a149bf-df78-7438-97d4-ee2d89d5e8ff</a></dd>
-          <dt>Turn</dt><dd><a href="session.html">Turn 10</a></dd>
+          <dt>会话</dt><dd><a href="index.html">01a149bf-df78-7438-97d4-ee2d89d5e8ff</a></dd>
+          <dt>Turn</dt><dd><a href="index.html">Turn 10</a></dd>
           <dt>同 Turn 的模型请求</dt><dd><a href="request.html">请求 #10</a></dd>
           <dt>同 Turn 的其他工具</dt><dd class="faint">无</dd>
           <dt>触发方式</dt><dd>assistant 消息中的 toolCall 块</dd>

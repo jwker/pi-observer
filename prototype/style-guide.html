@@ -5,6 +5,15 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>pi-observer · 设计规范</title>
 <link rel="stylesheet" href="styles.css">
+<script>
+/* 在首屏绘制前应用主题，避免暗色闪一下 */
+(function () {
+  try {
+    var t = localStorage.getItem("pi-observer-theme");
+    if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+  } catch (e) {}
+})();
+</script>
 </head>
 <body data-page="style-guide">
 
@@ -12,13 +21,15 @@
   <div class="topbar-inner">
     <div class="brand"><span class="dot">●</span>pi-observer <span class="sub">只读</span></div>
     <nav class="nav">
-      <a href="index.html">会话列表</a>
-      <a href="session.html">会话详情</a>
+      <a href="index.html">应用</a>
       <a href="probe.html">探针状态</a>
       <a class="active" href="style-guide.html">设计规范</a>
     </nav>
     <div class="spacer"></div>
     <span class="faint" style="font-size:11px">所有页面的取色与尺寸都来自 styles.css 顶部的 tokens</span>
+      <button class="btn ghost" data-theme-toggle title="切换亮色 / 暗色（D）" aria-pressed="false">
+        <span data-theme-icon>☾</span><span data-theme-label>暗色</span>
+      </button>
   </div>
 </div>
 
@@ -27,7 +38,7 @@
   <div class="page-head">
     <div class="title">
       <h1>设计规范</h1>
-      <div class="crumb">深色终端风格 · 等宽字体 · 发丝边框 · 小字号 · 克制的彩色语义</div>
+      <div class="crumb">深色终端 / 亮色纸面 · 等宽字体 · 发丝边框 · 小字号 · 克制的彩色语义</div>
     </div>
   </div>
 
@@ -48,14 +59,15 @@
   <div class="panel" style="margin-top:14px">
     <div class="panel-head"><span>色板</span><span class="count">变量名 → 用途</span></div>
     <div class="panel-body">
-      <div class="label" style="margin-bottom:8px">背景层次</div>
+      <div class="label" style="margin-bottom:8px">背景层次 · 随主题切换</div>
       <div class="swatches">
-        <div class="swatch"><div class="chiparea" style="background:var(--bg)"></div><div class="meta"><b>--bg</b>页面底 #0b0d10</div></div>
-        <div class="swatch"><div class="chiparea" style="background:var(--bg-1)"></div><div class="meta"><b>--bg-1</b>面板 #101418</div></div>
-        <div class="swatch"><div class="chiparea" style="background:var(--bg-2)"></div><div class="meta"><b>--bg-2</b>面板内浮层 #151a20</div></div>
-        <div class="swatch"><div class="chiparea" style="background:var(--bg-3)"></div><div class="meta"><b>--bg-3</b>选中/悬停 #1c2229</div></div>
-        <div class="swatch"><div class="chiparea" style="background:var(--bg-4)"></div><div class="meta"><b>--bg-4</b>进度条底 #232b34</div></div>
+        <div class="swatch"><div class="chiparea" style="background:var(--bg)"></div><div class="meta"><b>--bg</b>页面底 · 暗 #0b0d10 / 亮 #f4f5f6</div></div>
+        <div class="swatch"><div class="chiparea" style="background:var(--bg-1)"></div><div class="meta"><b>--bg-1</b>面板 · 暗 #101418 / 亮 #fbfbfc</div></div>
+        <div class="swatch"><div class="chiparea" style="background:var(--bg-2)"></div><div class="meta"><b>--bg-2</b>面板内浮层 · 暗 #151a20 / 亮 #eceef0</div></div>
+        <div class="swatch"><div class="chiparea" style="background:var(--bg-3)"></div><div class="meta"><b>--bg-3</b>选中/悬停 · 暗 #1c2229 / 亮 #e2e4e7</div></div>
+        <div class="swatch"><div class="chiparea" style="background:var(--bg-4)"></div><div class="meta"><b>--bg-4</b>进度条底 · 暗 #232b34 / 亮 #d5d8db</div></div>
       </div>
+      <div class="faint" style="margin-top:8px;font-size:10.5px">亮 / 暗主题只覆盖 token；色块随顶栏切换实时变化。</div>
 
       <div class="label" style="margin:16px 0 8px">边框与文字</div>
       <div class="swatches">
@@ -198,8 +210,8 @@
         <div class="label" style="margin-bottom:8px">列表行与数字列</div>
         <div class="rows" style="border:1px solid var(--border);border-radius:4px;overflow:hidden">
           <div class="row head" style="grid-template-columns:1fr 80px 80px 100px"><span>名称</span><span class="num">消息</span><span class="num">Turn</span><span class="num">成本</span></div>
-          <a class="row request hover" href="session.html" style="grid-template-columns:1fr 80px 80px 100px"><span>01a149bf · 整理 PRD v0.2</span><span class="num">42</span><span class="num">11</span><span class="num" style="color:var(--amber)">0.42</span></a>
-          <a class="row request hover" href="session.html" style="grid-template-columns:1fr 80px 80px 100px"><span>7c02de11 · 验证 Durable 可行性</span><span class="num">96</span><span class="num">24</span><span class="num" style="color:var(--amber)">1.18</span></a>
+          <a class="row request hover" href="index.html" style="grid-template-columns:1fr 80px 80px 100px"><span>01a149bf · 整理 PRD v0.2</span><span class="num">42</span><span class="num">11</span><span class="num" style="color:var(--amber)">0.42</span></a>
+          <a class="row request hover" href="index.html" style="grid-template-columns:1fr 80px 80px 100px"><span>7c02de11 · 验证 Durable 可行性</span><span class="num">96</span><span class="num">24</span><span class="num" style="color:var(--amber)">1.18</span></a>
         </div>
       </div>
 
@@ -224,28 +236,21 @@
       </div>
 
       <div>
-        <div class="label" style="margin-bottom:8px">时间线事件</div>
-        <div style="border:1px solid var(--border);border-left:2px solid var(--accent);border-radius:4px">
-          <div class="ev"><span class="time">21:04:58</span><span class="etype turn">turn_start</span><span class="body">turnIndex 11</span></div>
-          <div class="ev depth-1 tool"><span class="time">21:04:59</span><span class="etype tool">tool_end</span><span class="body">186 ms <span class="badge ok">成功</span></span></div>
-          <div class="ev depth-1 thinking"><span class="time">21:04:59</span><span class="etype message">thinking</span><span class="body">思考内容用斜体 + 次级色</span></div>
-          <div class="ev is-hidden"><span class="time">21:05:00</span><span class="etype message">hidden</span><span class="body">被 H 开关隐藏的行</span></div>
+        <div class="label" style="margin-bottom:8px">时间线：折叠的 Turn</div>
+        <div class="turn" style="margin-bottom:0">
+          <button class="turn-head" aria-expanded="false"><span class="twist">▸</span><span class="idx">Turn 34</span><span class="sum">默认折叠，只显示摘要与用量</span><span class="stats"><span class="badge ok sm">进行中</span><span>21:50</span><span>2 工具</span></span></button>
         </div>
       </div>
 
       <div>
-        <div class="label" style="margin-bottom:8px">消息树节点</div>
-        <div class="tree" style="border:1px solid var(--border);border-radius:4px;padding:6px 0">
-          <div class="node"><div class="node-line"><span class="twist">▾</span><span class="ic user">▸</span><span class="txt">用户消息</span><span class="meta">21:03</span></div>
-            <div class="node-children">
-              <div class="node"><div class="node-line"><span class="twist">▸</span><span class="ic assistant">▾</span><span class="txt">助手消息</span><span class="meta">4.2K</span></div>
-                <div class="node-children">
-                  <div class="node"><div class="node-line"><span class="twist"></span><span class="ic tool">→</span><span class="txt">read docs/prd-v0.2.md</span><span class="meta">186 ms</span></div></div>
-                </div>
-              </div>
-              <div class="node"><div class="node-line off-branch"><span class="twist"></span><span class="ic branch">⑂</span><span class="txt">未选中的分叉</span><span class="meta">已废弃</span></div></div>
-              <div class="node"><div class="node-line active"><span class="twist"></span><span class="ic assistant">▸</span><span class="txt">当前分支（左侧蓝色线）</span><span class="meta" style="color:var(--accent)">生成中</span></div></div>
-            </div>
+        <div class="label" style="margin-bottom:8px">时间线：条目行</div>
+        <div class="turn open" style="margin-bottom:0">
+          <div class="turn-body" style="display:block">
+            <div class="entry u" data-cat="msg"><span class="t">21:50:12</span><span class="k">用户</span><div class="b"><div class="txt">用户消息</div></div><span></span></div>
+            <div class="entry a" data-cat="msg"><span class="t">21:50:15</span><span class="k">助手</span><div class="b"><div class="txt">助手正文</div><details class="think"><summary>思考 · 1.2 KB</summary><div class="think-body">思考折叠在条目里，默认收起。</div></details><div class="tchips"><span class="tchip">→ read</span><span class="tchip">→ edit</span></div></div><span></span></div>
+            <div class="entry tool" data-cat="msg"><span class="t">21:50:16</span><span class="k">工具</span><div class="b"><div class="tr-head"><span class="name">read</span><span class="cmd">prototype/index.html</span><span class="badge ok sm">成功</span><span class="faint">186 ms</span></div><pre class="out">工具结果截断显示，全文在详情弹窗里。</pre></div><span></span></div>
+            <div class="entry off" data-cat="msg"><span class="t">21:35:02</span><span class="k">助手</span><div class="b"><div class="txt">不在当前分支上的条目（默认隐藏）</div></div><span></span></div>
+            <div class="entry ev" data-cat="run"><span class="t">21:50:17</span><span class="k ev">settled</span><div class="b">钩子事件：只补文件里没有的信息</div><span></span></div>
           </div>
         </div>
       </div>
@@ -270,9 +275,9 @@
       <div class="row" style="grid-template-columns:140px 1fr 1fr"><span style="color:var(--green)">green</span><span>成功、进行中、已订阅、只读承诺</span><span class="faint">状态徽章、探针在线、通知条左边线</span></div>
       <div class="row" style="grid-template-columns:140px 1fr 1fr"><span style="color:var(--amber)">amber</span><span>警告、空闲、成本、即将溢出、取不到的数据</span><span class="faint">成本数字、空闲状态、截断标记</span></div>
       <div class="row" style="grid-template-columns:140px 1fr 1fr"><span style="color:var(--red)">red</span><span>失败、丢弃、未订阅、错误输出</span><span class="faint">工具失败、离线丢弃计数</span></div>
-      <div class="row" style="grid-template-columns:140px 1fr 1fr"><span style="color:var(--accent)">accent</span><span>强调、进行中的 Turn、当前分支、活动标签下划线</span><span class="faint">Turn 边框、树节点、标签页</span></div>
-      <div class="row" style="grid-template-columns:140px 1fr 1fr"><span style="color:var(--cyan)">cyan</span><span>会话层事件、缓存 token</span><span class="faint">时间线标签、token 指标</span></div>
-      <div class="row" style="grid-template-columns:140px 1fr 1fr"><span style="color:var(--purple)">purple</span><span>消息层事件、思考、分支徽章</span><span class="faint">时间线标签、消息树</span></div>
+      <div class="row" style="grid-template-columns:140px 1fr 1fr"><span style="color:var(--accent)">accent</span><span>强调、进行中的 Turn、当前分支</span><span class="faint">Turn 左边线、左栏选中项、标签页</span></div>
+      <div class="row" style="grid-template-columns:140px 1fr 1fr"><span style="color:var(--cyan)">cyan</span><span>用户条目、会话层事件、缓存 token</span><span class="faint">时间线条目左边线、token 指标</span></div>
+      <div class="row" style="grid-template-columns:140px 1fr 1fr"><span style="color:var(--purple)">purple</span><span>助手条目、思考</span><span class="faint">时间线条目左边线</span></div>
       <div class="row" style="grid-template-columns:140px 1fr 1fr"><span style="color:var(--pink)">pink</span><span>工具层事件与工具名</span><span class="faint">时间线、工具列表</span></div>
       <div class="row" style="grid-template-columns:140px 1fr 1fr"><span style="color:var(--blue)">blue</span><span>链接、provider 名、主操作按钮</span><span class="faint">请求列表、复制按钮</span></div>
     </div>
@@ -282,8 +287,7 @@
     <div class="panel-head"><span>页面清单</span><span class="count">原型文件与 PRD 章节对应</span></div>
     <div class="rows">
       <div class="row head" style="grid-template-columns:200px 1fr 200px"><span>文件</span><span>内容</span><span>PRD</span></div>
-      <a class="row hover" href="index.html" style="grid-template-columns:200px 1fr 200px"><code>index.html</code><span>会话列表、分组、筛选、概览</span><span class="faint">§11.1</span></a>
-      <a class="row hover" href="session.html" style="grid-template-columns:200px 1fr 200px"><code>session.html</code><span>消息树 + 时间线 / 请求 / 工具三视图、实时正文</span><span class="faint">§11.2</span></a>
+      <a class="row hover" href="index.html" style="grid-template-columns:200px 1fr 200px"><code>index.html</code><span>单页：左栏项目 / 会话列表 + 右栏会话头、筛选、时间线、详情弹窗</span><span class="faint">§11.1 §11.2</span></a>
       <a class="row hover" href="request.html" style="grid-template-columns:200px 1fr 200px"><code>request.html</code><span>payload 脱敏展示、响应头、token 与成本、关联</span><span class="faint">§4.4 §8.6 §13</span></a>
       <a class="row hover" href="tool.html" style="grid-template-columns:200px 1fr 200px"><code>tool.html</code><span>工具参数、结果、部分结果、失败态</span><span class="faint">§5.2 §7.3</span></a>
       <a class="row hover" href="jsonl.html" style="grid-template-columns:200px 1fr 200px"><code>jsonl.html</code><span>原始条目、读取规则、条目类型</span><span class="faint">§4.2 §9.2</span></a>

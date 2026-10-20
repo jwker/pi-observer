@@ -5,6 +5,15 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>pi-observer · 会话 JSONL</title>
 <link rel="stylesheet" href="styles.css">
+<script>
+/* 在首屏绘制前应用主题，避免暗色闪一下 */
+(function () {
+  try {
+    var t = localStorage.getItem("pi-observer-theme");
+    if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+  } catch (e) {}
+})();
+</script>
 </head>
 <body data-page="jsonl">
 
@@ -12,13 +21,15 @@
   <div class="topbar-inner">
     <div class="brand"><span class="dot">●</span>pi-observer <span class="sub">只读</span></div>
     <nav class="nav">
-      <a href="index.html">会话列表</a>
-      <a class="active" href="session.html">会话详情</a>
+      <a class="active" href="index.html">应用</a>
       <a href="probe.html">探针状态</a>
       <a href="style-guide.html">设计规范</a>
     </nav>
     <div class="spacer"></div>
     <span class="probe-pill"><span class="pulse"></span>探针已连接 · 2 秒前</span>
+      <button class="btn ghost" data-theme-toggle title="切换亮色 / 暗色（D）" aria-pressed="false">
+        <span data-theme-icon>☾</span><span data-theme-label>暗色</span>
+      </button>
   </div>
 </div>
 
@@ -26,7 +37,7 @@
 
   <div class="page-head">
     <div class="title">
-      <div class="crumb"><a href="index.html">会话列表</a> / <a href="session.html">01a149bf</a> / JSONL</div>
+      <div class="crumb"><a href="index.html">应用</a> / <a href="index.html">01a149bf</a> / JSONL</div>
       <h1>会话文件原始条目</h1>
     </div>
     <div class="spacer"></div>

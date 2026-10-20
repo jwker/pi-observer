@@ -3,195 +3,763 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>pi-observer · 会话列表</title>
+<title>pi-observer · 会话</title>
 <link rel="stylesheet" href="styles.css">
+<script>
+/* 在首屏绘制前应用主题，避免暗色闪一下 */
+(function () {
+  try {
+    var t = localStorage.getItem("pi-observer-theme");
+    if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+  } catch (e) {}
+})();
+</script>
 </head>
-<body data-page="sessions">
+<body data-page="shell">
 
-<!-- ===================== 顶栏 ===================== -->
-<div class="topbar">
-  <div class="topbar-inner">
-    <div class="brand">
-      <span class="dot">●</span>pi-observer
-      <span class="sub">只读</span>
-    </div>
-    <nav class="nav">
-      <a class="active" href="index.html">会话列表</a>
-      <a href="probe.html">探针状态</a>
-      <a href="style-guide.html">设计规范</a>
-    </nav>
-    <div class="spacer"></div>
-    <span class="probe-pill" title="探针最近一次推送时间">
-      <span class="pulse"></span>探针已连接 · 2 秒前
-    </span>
-  </div>
-</div>
+<div class="app">
 
-<div class="page">
-
-  <!-- ===================== 页头 ===================== -->
-  <div class="page-head">
-    <div class="title">
-      <h1>会话列表</h1>
-      <div class="crumb">按项目分组 · 按最后活跃时间倒序 · 共 6 个会话</div>
-    </div>
-    <div class="spacer"></div>
-    <span class="kbd">/</span><span class="faint" style="font-size:11px">搜索</span>
-  </div>
-
-  <div class="notice readonly">
-    <span class="ic">◍</span>
-    <div>只读界面：不提供删除、隐藏、重命名等入口。数据来自 <code>~/.pi/agent/sessions/</code> 的会话文件与探针推送，不改动 Pi 的任何数据。</div>
-  </div>
-
-  <!-- ===================== 概览 ===================== -->
-  <div class="panel" style="margin-top:14px">
-    <div class="panel-body metrics">
-      <div class="metric"><span class="label">活跃会话</span><span class="v up">2</span></div>
-      <div class="metric"><span class="label">会话总数</span><span class="v">6</span></div>
-      <div class="metric"><span class="label">今日事件</span><span class="v">1,842</span></div>
-      <div class="metric"><span class="label">今日 token</span><span class="v down">↑ 412K / ↓ 38K</span></div>
-      <div class="metric"><span class="label">今日成本</span><span class="v cost">$ 1.24</span></div>
-      <div class="metric"><span class="label">丢弃事件</span><span class="v">0</span></div>
-      <div class="metric"><span class="label">最近对账</span><span class="v" style="font-size:12px;color:var(--fg-1)">21:04:12</span></div>
-    </div>
-  </div>
-
-  <!-- ===================== 筛选 + 列表 ===================== -->
-  <div class="panel" style="margin-top:14px" data-filters>
-    <div class="panel-head">
-      <span>会话</span>
-      <span class="count">6 个</span>
-    </div>
-
-    <div class="panel-body toolbar">
-      <label class="input">
-        <span style="color:var(--fg-3)">⌕</span>
-        <input data-search placeholder="搜索会话 ID、项目路径、模型或摘要…">
-      </label>
-      <div class="seg">
-        <button data-filter-group="state" data-filter-value="all" class="on">全部</button>
-        <button data-filter-group="state" data-filter-value="active">进行中</button>
-        <button data-filter-group="state" data-filter-value="idle">空闲</button>
-        <button data-filter-group="state" data-filter-value="ended">已结束</button>
-      </div>
-      <div class="seg">
-        <button data-filter-group="src" data-filter-value="all" class="on">全部来源</button>
-        <button data-filter-group="src" data-filter-value="live">实时</button>
-        <button data-filter-group="src" data-filter-value="backfill">回填</button>
-        <button data-filter-group="src" data-filter-value="merged">已对账</button>
-      </div>
+  <!-- ===================== 顶栏 ===================== -->
+  <div class="topbar">
+    <div class="topbar-inner">
+      <div class="brand"><span class="dot">●</span>pi-observer <span class="sub">只读</span></div>
+      <nav class="nav">
+        <a class="active" href="index.html">应用</a>
+        <a href="probe.html">探针状态</a>
+        <a href="style-guide.html">设计规范</a>
+      </nav>
       <div class="spacer"></div>
-      <span class="faint" style="font-size:11px">点击任意一行进入会话详情</span>
-    </div>
-
-    <div class="rows">
-      <div class="row head session">
-        <span></span><span>会话</span><span>摘要 / 项目</span>
-        <span class="num">消息</span><span class="num">Turn</span><span class="num">工具</span>
-        <span class="num">token</span><span class="num">成本</span><span class="num">最后活跃</span>
-      </div>
-
-      <!-- ---------- 分组：pi-observer ---------- -->
-      <div class="group">
-        <div class="group-head"><span class="path">/Users/jiangjiang/Documents/host/pi-observer</span><span class="faint">2 个会话</span></div>
-
-        <a class="row session hover" href="session.html" data-row data-state="active" data-src="merged" data-search="/Users/jiangjiang/Documents/host/pi-observer deepseek-v4-pro 整理 PRD">
-          <span class="badge plain"><span class="dot-sm" style="color:var(--green)"></span></span>
-          <span class="nowrap" style="color:var(--fg-1)">01a149bf</span>
-          <span class="col-grow"><span style="color:var(--fg)">整理 PRD v0.2 与保留策略</span> <span class="faint">·</span> <span class="badge ok">进行中</span></span>
-          <span class="num">42</span><span class="num">11</span><span class="num">18</span>
-          <span class="num" style="color:var(--green)">↑ 128K</span>
-          <span class="num" style="color:var(--amber)">0.42</span>
-          <span class="num faint">2 秒前</span>
-        </a>
-
-        <a class="row session hover" href="session.html" data-row data-state="idle" data-src="backfill" data-search="/Users/jiangjiang/Documents/host/pi-observer deepseek-v4-pro Durable">
-          <span class="badge plain"><span class="dot-sm" style="color:var(--amber)"></span></span>
-          <span class="nowrap" style="color:var(--fg-1)">7c02de11</span>
-          <span class="col-grow"><span style="color:var(--fg)">验证 Durable 只读可行性</span> <span class="faint">·</span> <span class="badge warn">空闲</span></span>
-          <span class="num">96</span><span class="num">24</span><span class="num">57</span>
-          <span class="num" style="color:var(--green)">↑ 402K</span>
-          <span class="num" style="color:var(--amber)">1.18</span>
-          <span class="num faint">3 小时前</span>
-        </a>
-      </div>
-
-      <!-- ---------- 分组：示例项目 ---------- -->
-      <div class="group">
-        <div class="group-head"><span class="path">/Users/jiangjiang/work/notes-app</span><span class="faint">3 个会话</span></div>
-
-        <a class="row session hover" href="session.html" data-row data-state="active" data-src="live" data-search="/Users/jiangjiang/work/notes-app deepseek-v4-pro 语法高亮">
-          <span class="badge plain"><span class="dot-sm" style="color:var(--green)"></span></span>
-          <span class="nowrap" style="color:var(--fg-1)">3f81c0a7</span>
-          <span class="col-grow"><span style="color:var(--fg)">排查编辑器语法高亮懒加载</span> <span class="faint">·</span> <span class="badge ok">进行中</span></span>
-          <span class="num">17</span><span class="num">6</span><span class="num">8</span>
-          <span class="num" style="color:var(--green)">↑ 15K</span>
-          <span class="num" style="color:var(--amber)">0.04</span>
-          <span class="num faint">26 秒前</span>
-        </a>
-
-        <a class="row session hover" href="session.html" data-row data-state="ended" data-src="backfill" data-search="/Users/jiangjiang/work/notes-app deepseek-v4-pro 时间线">
-          <span class="badge plain"><span class="dot-sm" style="color:var(--fg-3)"></span></span>
-          <span class="nowrap" style="color:var(--fg-1)">b19dd3ee</span>
-          <span class="col-grow"><span style="color:var(--fg)">时间线列表虚拟滚动</span> <span class="faint">·</span> <span class="badge">已结束</span></span>
-          <span class="num">210</span><span class="num">48</span><span class="num">122</span>
-          <span class="num" style="color:var(--green)">↑ 1.2M</span>
-          <span class="num" style="color:var(--amber)">3.61</span>
-          <span class="num faint">昨天 19:22</span>
-        </a>
-
-        <a class="row session hover" href="session.html" data-row data-state="ended" data-src="merged" data-search="/Users/jiangjiang/work/notes-app deepseek-v4-pro 分叉">
-          <span class="badge plain"><span class="dot-sm" style="color:var(--fg-3)"></span></span>
-          <span class="nowrap" style="color:var(--fg-1)">5a0c7731</span>
-          <span class="col-grow"><span style="color:var(--fg)">分叉：改用轻量高亮内核</span> <span class="faint">·</span> <span class="badge">已结束</span> <span class="badge violet">分支</span></span>
-          <span class="num">54</span><span class="num">12</span><span class="num">20</span>
-          <span class="num" style="color:var(--green)">↑ 88K</span>
-          <span class="num" style="color:var(--amber)">0.31</span>
-          <span class="num faint">10 月 17 日</span>
-        </a>
-      </div>
-
-      <!-- ---------- 分组：scratch ---------- -->
-      <div class="group">
-        <div class="group-head"><span class="path">/Users/jiangjiang/scratch</span><span class="faint">1 个会话</span></div>
-
-        <a class="row session hover" href="session.html" data-row data-state="idle" data-src="live" data-search="/Users/jiangjiang/scratch deepseek-v4-pro 草稿">
-          <span class="badge plain"><span class="dot-sm" style="color:var(--amber)"></span></span>
-          <span class="nowrap" style="color:var(--fg-1)">9e4410ab</span>
-          <span class="col-grow"><span style="color:var(--fg)">草稿：比较两种消息树渲染方式</span> <span class="faint">·</span> <span class="badge warn">空闲</span></span>
-          <span class="num">6</span><span class="num">2</span><span class="num">0</span>
-          <span class="num" style="color:var(--green)">↑ 4.2K</span>
-          <span class="num" style="color:var(--amber)">0.01</span>
-          <span class="num faint">10 月 16 日</span>
-        </a>
-      </div>
-
-      <div class="empty" data-empty style="display:none">没有匹配的会话。试试清空搜索或切换筛选。</div>
+      <span class="probe-pill" title="探针最近一次推送时间"><span class="pulse"></span>探针已连接 · 1 秒前</span>
+      <button class="btn ghost" data-theme-toggle title="切换亮色 / 暗色（D）" aria-pressed="false">
+        <span data-theme-icon>☾</span><span data-theme-label>暗色</span>
+      </button>
     </div>
   </div>
 
-  <div class="notice" style="margin-top:14px">
-    <span class="ic">i</span>
-    <div>
-      <b style="color:var(--fg)">状态口径</b>：<span class="badge ok">进行中</span> 最近有实时事件；
-      <span class="badge warn">空闲</span> 已收到 <code>agent_settled</code> 且 60 秒无新事件；
-      <span class="badge">已结束</span> 会话进程已退出。来源标记：<code>live</code> 实时推送、<code>backfill</code> 从会话文件回填、<code>merged</code> 已对账。
+  <div class="app-body">
+
+    <!-- ===================== 左栏：项目 / 会话 ===================== -->
+    <aside class="sidebar">
+      <div class="sb-head"><span class="label">会话</span><span class="count">6 个</span></div>
+      <div class="sb-search">
+        <label class="input"><span style="color:var(--fg-3)">⌕</span><input data-sb-search placeholder="搜索摘要、项目、会话 ID…"></label>
+      </div>
+
+      <div class="sb-scroll">
+
+        <div class="proj" data-sb-group>
+          <div class="proj-head"><span class="p">/Users/jiangjiang/Documents/host/pi-observer</span><span class="n">2</span></div>
+
+          <a class="sess on" href="#s=01a1545a" data-sb-row data-sess="01a1545a" data-view="s1"
+             data-cwd="/Users/jiangjiang/Documents/host/pi-observer"
+             data-id="01a1545a-59d6-7746-916e-0e2072f1be67"
+             data-state="live" data-recon="yes"
+             data-model="deepseek-v4-pro" data-thinking="medium" data-updated="1 秒前"
+             data-file="2026-10-19T13-29-29-814Z_01a1545a.jsonl"
+             data-msgs="719" data-turns="34" data-tools="122" data-in="2.1M" data-out="84K" data-cache="1.8M" data-cost="4.20"
+             data-c-msg="690" data-c-session="9" data-c-run="12" data-c-tool="122" data-c-model="68" data-c-probe="0">
+            <div class="sess-row"><span class="dot"></span><span class="sum">彻底重构：时间线以 JSONL 条目为主</span></div>
+            <div class="sess-meta"><span>01a1545a</span><span>34 Turn</span><span>1 秒前</span></div>
+          </a>
+
+          <a class="sess" href="#s=01a149bf" data-sb-row data-sess="01a149bf" data-view="s2"
+             data-cwd="/Users/jiangjiang/Documents/host/pi-observer"
+             data-id="01a149bf-df78-7438-97d4-ee2d89d5e8ff"
+             data-state="ended" data-recon="no"
+             data-model="deepseek-v4-pro" data-thinking="medium" data-updated="昨天 18:22"
+             data-file="2026-10-18T10-04-11-220Z_01a149bf.jsonl"
+             data-msgs="17" data-turns="5" data-tools="0" data-in="42K" data-out="2.1K" data-cache="38K" data-cost="0.09"
+             data-c-msg="17" data-c-session="0" data-c-run="0" data-c-tool="0" data-c-model="0" data-c-probe="0">
+            <div class="sess-row"><span class="dot ended"></span><span class="sum">读一下 PRD，确认保留策略</span></div>
+            <div class="sess-meta"><span>01a149bf</span><span>5 Turn</span><span>昨天</span></div>
+          </a>
+        </div>
+
+        <div class="proj" data-sb-group>
+          <div class="proj-head"><span class="p">/Users/jiangjiang/work/notes-app</span><span class="n">3</span></div>
+
+          <a class="sess" href="#s=3f81c0a7" data-sb-row data-sess="3f81c0a7" data-view="s3"
+             data-cwd="/Users/jiangjiang/work/notes-app"
+             data-id="3f81c0a7-2f4e-4c19-9d0a-8b6f0e1a2c33"
+             data-state="idle" data-recon="yes"
+             data-model="deepseek-v4-pro" data-thinking="low" data-updated="26 秒前"
+             data-file="2026-10-19T09-12-03-882Z_3f81c0a7.jsonl"
+             data-msgs="17" data-turns="6" data-tools="8" data-in="15K" data-out="1.2K" data-cache="12K" data-cost="0.04"
+             data-c-msg="17" data-c-session="1" data-c-run="4" data-c-tool="8" data-c-model="6" data-c-probe="0">
+            <div class="sess-row"><span class="dot idle"></span><span class="sum">排查编辑器语法高亮懒加载</span></div>
+            <div class="sess-meta"><span>3f81c0a7</span><span>6 Turn</span><span>26 秒前</span></div>
+          </a>
+
+          <a class="sess" href="#s=b19dd3ee" data-sb-row data-sess="b19dd3ee" data-view="empty"
+             data-cwd="/Users/jiangjiang/work/notes-app"
+             data-id="b19dd3ee-6a10-4c77-a2e1-55c0d9e8b412"
+             data-state="ended" data-recon="yes"
+             data-model="deepseek-v4-pro" data-thinking="medium" data-updated="昨天 19:22"
+             data-file="2026-10-18T15-40-08-117Z_b19dd3ee.jsonl"
+             data-msgs="210" data-turns="48" data-tools="122" data-in="1.2M" data-out="38K" data-cache="1.1M" data-cost="3.61"
+             data-c-msg="210" data-c-session="2" data-c-run="3" data-c-tool="122" data-c-model="48" data-c-probe="0">
+            <div class="sess-row"><span class="dot ended"></span><span class="sum">时间线列表虚拟滚动</span></div>
+            <div class="sess-meta"><span>b19dd3ee</span><span>48 Turn</span><span>昨天</span></div>
+          </a>
+
+          <a class="sess" href="#s=5a0c7731" data-sb-row data-sess="5a0c7731" data-view="empty"
+             data-cwd="/Users/jiangjiang/work/notes-app"
+             data-id="5a0c7731-88b2-4d0f-9f31-2a7c6e5d1b90"
+             data-state="ended" data-recon="yes"
+             data-model="deepseek-v4-pro" data-thinking="medium" data-updated="10 月 17 日"
+             data-file="2026-10-17T14-02-55-301Z_5a0c7731.jsonl"
+             data-msgs="54" data-turns="12" data-tools="20" data-in="88K" data-out="4.2K" data-cache="80K" data-cost="0.31"
+             data-c-msg="54" data-c-session="3" data-c-run="2" data-c-tool="20" data-c-model="12" data-c-probe="0">
+            <div class="sess-row"><span class="dot ended"></span><span class="sum">分叉：改用轻量高亮内核</span></div>
+            <div class="sess-meta"><span>5a0c7731</span><span>12 Turn</span><span>10 月 17 日</span></div>
+          </a>
+        </div>
+
+        <div class="proj" data-sb-group>
+          <div class="proj-head"><span class="p">/Users/jiangjiang/scratch</span><span class="n">1</span></div>
+
+          <a class="sess" href="#s=9e4410ab" data-sb-row data-sess="9e4410ab" data-view="empty"
+             data-cwd="/Users/jiangjiang/scratch"
+             data-id="9e4410ab-1d7c-4a2b-8f60-3e5a9c0b7d21"
+             data-state="idle" data-recon="yes"
+             data-model="deepseek-v4-pro" data-thinking="low" data-updated="10 月 16 日"
+             data-file="2026-10-16T09-30-12-004Z_9e4410ab.jsonl"
+             data-msgs="6" data-turns="2" data-tools="0" data-in="4.2K" data-out="180" data-cache="4K" data-cost="0.01"
+             data-c-msg="6" data-c-session="1" data-c-run="0" data-c-tool="0" data-c-model="2" data-c-probe="0">
+            <div class="sess-row"><span class="dot idle"></span><span class="sum">草稿：比较两种消息树渲染方式</span></div>
+            <div class="sess-meta"><span>9e4410ab</span><span>2 Turn</span><span>10 月 16 日</span></div>
+          </a>
+        </div>
+
+        <div class="empty" data-sb-empty hidden style="padding:24px 12px">没有匹配的会话。</div>
+
+      </div>
+
+      <div class="sb-foot"><span class="dot-sm" style="color:var(--green)"></span>只读 · 不删除、不改名</div>
+    </aside>
+
+    <!-- ===================== 右侧：会话头 + 筛选 + 时间线 ===================== -->
+    <main class="main">
+
+      <div class="session-head">
+        <div class="sh-line">
+          <span class="sh-cwd" data-h-cwd>/Users/jiangjiang/Documents/host/pi-observer</span>
+          <span class="sep">/</span>
+          <span class="sh-id" data-h-id>01a1545a-59d6-7746-916e-0e2072f1be67</span>
+          <span class="badge ok" data-h-state>进行中</span>
+          <span class="badge info" data-h-recon>已对账</span>
+          <span class="sh-actions">
+            <a class="btn sm" href="jsonl.html">会话文件</a>
+            <button class="btn sm" data-refresh>刷新</button>
+          </span>
+        </div>
+        <div class="sh-sub">
+          <span class="m">模型 <b data-h-model>deepseek-v4-pro</b></span>
+          <span class="m">思考 <b data-h-thinking>medium</b></span>
+          <span class="m">更新 <b data-h-updated>1 秒前</b></span>
+          <span class="m file" data-h-file>2026-10-19T13-29-29-814Z_01a1545a.jsonl</span>
+          <span class="m">条目 <b data-h-msgs>719</b></span>
+          <span class="m">Turn <b data-h-turns>34</b></span>
+          <span class="m">工具 <b data-h-tools>122</b></span>
+          <span class="m">↑ <b data-h-in>2.1M</b></span>
+          <span class="m">↓ <b data-h-out>84K</b></span>
+          <span class="m">缓存 <b data-h-cache>1.8M</b></span>
+          <span class="m">$ <b data-h-cost>4.20</b></span>
+        </div>
+      </div>
+
+      <div class="filterbar">
+        <div class="fb-row">
+          <span class="fb-label">显示</span>
+          <button class="chip on" data-cat-chip="msg">消息 <span class="n" data-count="msg">690</span></button>
+          <button class="chip on" data-cat-chip="session">会话 <span class="n" data-count="session">9</span></button>
+          <button class="chip on" data-cat-chip="run">运行 <span class="n" data-count="run">12</span></button>
+          <button class="chip on" data-cat-chip="tool">工具 <span class="n" data-count="tool">122</span></button>
+          <button class="chip on" data-cat-chip="model">模型 <span class="n" data-count="model">68</span></button>
+          <button class="chip on" data-cat-chip="probe">探针 <span class="n" data-count="probe">0</span></button>
+          <span class="fb-spacer"></span>
+          <button class="chip on" data-think-chip title="显示或隐藏思考过程（T）">思考</button>
+          <button class="chip" data-branch-chip title="显示不在当前分支上的条目（B）">其它分支</button>
+          <button class="btn sm" data-expand-all>展开全部</button>
+        </div>
+      </div>
+
+      <!-- ---------------------------------------------------- 会话 1 -->
+      <div class="view" data-view="s1">
+        <div class="tl-scroll">
+          <div class="tl">
+
+            <div class="tl-top">
+              <span data-turn-range>最近 20 个 Turn</span>
+              <span class="faint">· 共 34 个 · 719 条</span>
+              <span class="spacer"></span>
+              <span>点击 Turn 展开 · 进行中自动展开</span>
+            </div>
+
+            <div class="load-earlier" data-load-wrap>
+              <button class="btn" data-load-earlier>加载更早的 20 个 Turn</button>
+            </div>
+
+            <!-- ---------- 更早的一页（默认隐藏） ---------- -->
+            <div data-earlier hidden>
+              <div class="turn" data-turn="1">
+                <button class="turn-head" aria-expanded="false"><span class="twist">▸</span><span class="idx">Turn 1</span><span class="sum">先读 PRD，确认这一版要做什么</span><span class="stats"><span>13:29</span><span>2 工具</span><span>↑ 9.2K ↓ 640</span><span>$ 0.02</span></span></button>
+                <div class="turn-body"><div class="empty">原型只保留标题：更早的条目不再展开。</div></div>
+              </div>
+              <div class="turn" data-turn="2">
+                <button class="turn-head" aria-expanded="false"><span class="twist">▸</span><span class="idx">Turn 2</span><span class="sum">列出 M0 的验收项</span><span class="stats"><span>13:41</span><span>1 工具</span><span>↑ 11K ↓ 520</span><span>$ 0.02</span></span></button>
+                <div class="turn-body"><div class="empty">原型只保留标题：更早的条目不再展开。</div></div>
+              </div>
+              <div class="turn" data-turn="3">
+                <button class="turn-head" aria-expanded="false"><span class="twist">▸</span><span class="idx">Turn 3</span><span class="sum">确认只读边界：不回写 Pi 的任何文件</span><span class="stats"><span>13:55</span><span>0 工具</span><span>↑ 12K ↓ 380</span><span>$ 0.02</span></span></button>
+                <div class="turn-body"><div class="empty">原型只保留标题：更早的条目不再展开。</div></div>
+              </div>
+              <div class="turn" data-turn="4">
+                <button class="turn-head" aria-expanded="false"><span class="twist">▸</span><span class="idx">Turn 4</span><span class="sum">选 Next.js 16 App Router</span><span class="stats"><span>14:08</span><span>2 工具</span><span>↑ 14K ↓ 760</span><span>$ 0.03</span></span></button>
+                <div class="turn-body"><div class="empty">原型只保留标题：更早的条目不再展开。</div></div>
+              </div>
+              <div class="turn" data-turn="5">
+                <button class="turn-head" aria-expanded="false"><span class="twist">▸</span><span class="idx">Turn 5</span><span class="sum">把 node:sqlite 的单例挂到 globalThis</span><span class="stats"><span>14:26</span><span>1 工具</span><span>↑ 16K ↓ 410</span><span>$ 0.03</span></span></button>
+                <div class="turn-body"><div class="empty">原型只保留标题：更早的条目不再展开。</div></div>
+              </div>
+              <div class="turn" data-turn="6">
+                <button class="turn-head" aria-expanded="false"><span class="twist">▸</span><span class="idx">Turn 6</span><span class="sum">定义协议 v1 的字段</span><span class="stats"><span>14:48</span><span>0 工具</span><span>↑ 18K ↓ 920</span><span>$ 0.04</span></span></button>
+                <div class="turn-body"><div class="empty">原型只保留标题：更早的条目不再展开。</div></div>
+              </div>
+              <div class="turn" data-turn="7">
+                <button class="turn-head" aria-expanded="false"><span class="twist">▸</span><span class="idx">Turn 7</span><span class="sum">写 M1 的页面骨架</span><span class="stats"><span>15:12</span><span>3 工具</span><span>↑ 21K ↓ 1.1K</span><span>$ 0.04</span></span></button>
+                <div class="turn-body"><div class="empty">原型只保留标题：更早的条目不再展开。</div></div>
+              </div>
+              <div class="turn" data-turn="8">
+                <button class="turn-head" aria-expanded="false"><span class="twist">▸</span><span class="idx">Turn 8</span><span class="sum">SSE 断线重连与退避档位</span><span class="stats"><span>15:40</span><span>2 工具</span><span>↑ 23K ↓ 780</span><span>$ 0.04</span></span></button>
+                <div class="turn-body"><div class="empty">原型只保留标题：更早的条目不再展开。</div></div>
+              </div>
+              <div class="turn" data-turn="9">
+                <button class="turn-head" aria-expanded="false"><span class="twist">▸</span><span class="idx">Turn 9</span><span class="sum">探针队列的上限与丢弃计数</span><span class="stats"><span>16:05</span><span>1 工具</span><span>↑ 25K ↓ 530</span><span>$ 0.04</span></span></button>
+                <div class="turn-body"><div class="empty">原型只保留标题：更早的条目不再展开。</div></div>
+              </div>
+              <div class="turn" data-turn="10">
+                <button class="turn-head" aria-expanded="false"><span class="twist">▸</span><span class="idx">Turn 10</span><span class="sum">回填会话的标志怎么算</span><span class="stats"><span>16:33</span><span>2 工具</span><span>↑ 27K ↓ 640</span><span>$ 0.05</span></span></button>
+                <div class="turn-body"><div class="empty">原型只保留标题：更早的条目不再展开。</div></div>
+              </div>
+              <div class="turn" data-turn="11">
+                <button class="turn-head" aria-expanded="false"><span class="twist">▸</span><span class="idx">Turn 11</span><span class="sum">把 parentId 链折算成当前分支</span><span class="stats"><span>17:02</span><span>3 工具</span><span>↑ 31K ↓ 1.2K</span><span>$ 0.05</span></span></button>
+                <div class="turn-body"><div class="empty">原型只保留标题：更早的条目不再展开。</div></div>
+              </div>
+              <div class="turn" data-turn="12">
+                <button class="turn-head" aria-expanded="false"><span class="twist">▸</span><span class="idx">Turn 12</span><span class="sum">消息树先按 5000 条截断</span><span class="stats"><span>17:38</span><span>1 工具</span><span>↑ 34K ↓ 480</span><span>$ 0.06</span></span></button>
+                <div class="turn-body"><div class="empty">原型只保留标题：更早的条目不再展开。</div></div>
+              </div>
+              <div class="turn" data-turn="13">
+                <button class="turn-head" aria-expanded="false"><span class="twist">▸</span><span class="idx">Turn 13</span><span class="sum">请求详情按会话内顺序配对</span><span class="stats"><span>18:40</span><span>2 工具</span><span>↑ 36K ↓ 890</span><span>$ 0.06</span></span></button>
+                <div class="turn-body"><div class="empty">原型只保留标题：更早的条目不再展开。</div></div>
+              </div>
+              <div class="turn" data-turn="14">
+                <button class="turn-head" aria-expanded="false"><span class="twist">▸</span><span class="idx">Turn 14</span><span class="sum">首次跑通真实 Pi 的一轮对话</span><span class="stats"><span>20:38</span><span>4 工具</span><span>↑ 48K ↓ 2.4K</span><span>$ 0.09</span></span></button>
+                <div class="turn-body"><div class="empty">原型只保留标题：更早的条目不再展开。</div></div>
+              </div>
+            </div>
+
+            <!-- ---------- 最近 20 个 Turn ---------- -->
+
+            <div class="turn" data-turn="15">
+              <button class="turn-head" aria-expanded="false"><span class="twist">▸</span><span class="idx">Turn 15</span><span class="sum">整理 M3-5 用量汇总的验收步骤</span><span class="stats"><span>20:41</span><span>4 工具</span><span>↑ 12.4K ↓ 680</span><span>$ 0.03</span></span></button>
+              <div class="turn-body">
+                <div class="entry u" data-cat="msg"><span class="t">20:41:03</span><span class="k">用户</span><div class="b"><div class="txt">把用量汇总的验收步骤写清楚，缓存读写也算进去。</div></div><button class="more" data-detail="d-msg">⋯</button></div>
+                <div class="entry a" data-cat="msg"><span class="t">20:41:12</span><span class="k">助手</span><div class="b"><div class="txt">分三步：会话级汇总、Turn 级汇总、真实库对照。缓存读写从 assistant 消息的 usage 里取。</div><div class="tchips"><span class="tchip">→ read</span><span class="tchip">→ edit</span></div></div><button class="more" data-detail="d-msg">⋯</button></div>
+              </div>
+            </div>
+
+            <div class="turn" data-turn="16">
+              <button class="turn-head" aria-expanded="false"><span class="twist">▸</span><span class="idx">Turn 16</span><span class="sum">把缓存读写加进会话头部</span><span class="stats"><span>20:44</span><span>2 工具</span><span>↑ 18K ↓ 720</span><span>$ 0.04</span></span></button>
+              <div class="turn-body">
+                <div class="entry u" data-cat="msg"><span class="t">20:44:10</span><span class="k">用户</span><div class="b"><div class="txt">会话头部也要显示缓存读取，不然只能看单轮。</div></div><button class="more" data-detail="d-msg">⋯</button></div>
+                <div class="entry a" data-cat="msg"><span class="t">20:44:31</span><span class="k">助手</span><div class="b"><div class="txt">加在成本前面，口径和 Turn 头一致：只统计 assistant 消息的 usage.cacheRead。</div></div><button class="more" data-detail="d-msg">⋯</button></div>
+              </div>
+            </div>
+
+            <div class="turn" data-turn="17">
+              <button class="turn-head" aria-expanded="false"><span class="twist">▸</span><span class="idx">Turn 17</span><span class="sum">真实库跑 tree-compare 对照</span><span class="stats"><span>20:47</span><span>3 工具</span><span>↑ 84K ↓ 1.6K</span><span>$ 0.12</span></span></button>
+              <div class="turn-body">
+                <div class="entry u" data-cat="msg"><span class="t">20:47:02</span><span class="k">用户</span><div class="b"><div class="txt">拿真实库跑一遍对照，7 个会话都要一致。</div></div><button class="more" data-detail="d-msg">⋯</button></div>
+                <div class="entry a" data-cat="msg"><span class="t">20:47:55</span><span class="k">助手</span><div class="b"><div class="txt">763 条条目、746 条消息，token、缓存、成本全部一致。</div><div class="tchips"><span class="tchip">→ bash</span><span class="tchip">→ read</span></div></div><button class="more" data-detail="d-msg">⋯</button></div>
+              </div>
+            </div>
+
+            <div class="turn" data-turn="18">
+              <button class="turn-head" aria-expanded="false"><span class="twist">▸</span><span class="idx">Turn 18</span><span class="sum">覆盖率掉到 94.8%，补两个分支</span><span class="stats"><span>20:50</span><span>1 工具</span><span>↑ 22K ↓ 560</span><span>$ 0.04</span></span></button>
+              <div class="turn-body">
+                <div class="entry u" data-cat="msg"><span class="t">20:50:18</span><span class="k">用户</span><div class="b"><div class="txt">为什么覆盖率比上一版低？</div></div><button class="more" data-detail="d-msg">⋯</button></div>
+                <div class="entry a" data-cat="msg"><span class="t">20:50:40</span><span class="k">助手</span><div class="b"><div class="txt">新增了两个空值分支没测到：usage 缺失、turn 没有 messageEntryId。补上后回到 94.9%。</div></div><button class="more" data-detail="d-msg">⋯</button></div>
+              </div>
+            </div>
+
+            <div class="turn" data-turn="19">
+              <button class="turn-head" aria-expanded="false"><span class="twist">▸</span><span class="idx">Turn 19</span><span class="sum">解释模板字符串为什么不能直接拼</span><span class="stats"><span>20:54</span><span>0 工具</span><span>↑ 12K ↓ 420</span><span>$ 0.02</span></span></button>
+              <div class="turn-body">
+                <div class="entry u" data-cat="msg"><span class="t">20:54:06</span><span class="k">用户</span><div class="b"><div class="txt">SQL 里为什么不能把表名当参数传？</div></div><button class="more" data-detail="d-msg">⋯</button></div>
+                <div class="entry a" data-cat="msg"><span class="t">20:54:14</span><span class="k">助手</span><div class="b"><div class="txt">参数只用于值，标识符要拼接，所以表名只接受白名单常量，不接收外部输入。</div></div><button class="more" data-detail="d-msg">⋯</button></div>
+              </div>
+            </div>
+
+            <div class="turn" data-turn="20">
+              <button class="turn-head" aria-expanded="false"><span class="twist">▸</span><span class="idx">Turn 20</span><span class="sum">重跑档 A，26 项全过</span><span class="stats"><span>20:57</span><span>2 工具</span><span>↑ 16K ↓ 380</span><span>$ 0.03</span></span></button>
+              <div class="turn-body">
+                <div class="entry u" data-cat="msg"><span class="t">20:57:02</span><span class="k">用户</span><div class="b"><div class="txt">跑一下档 A。</div></div><button class="more" data-detail="d-msg">⋯</button></div>
+                <div class="entry a" data-cat="msg"><span class="t">20:57:41</span><span class="k">助手</span><div class="b"><div class="txt">26 项全过，用时 8.2 秒；离线模式没有网络请求。</div><div class="tchips"><span class="tchip">→ bash</span></div></div><button class="more" data-detail="d-msg">⋯</button></div>
+              </div>
+            </div>
+
+            <div class="turn" data-turn="21">
+              <button class="turn-head" aria-expanded="false"><span class="twist">▸</span><span class="idx">Turn 21</span><span class="sum">讨论存储去重的三种做法</span><span class="stats"><span>21:01</span><span>0 工具</span><span>↑ 14K ↓ 1.1K</span><span>$ 0.03</span></span></button>
+              <div class="turn-body">
+                <div class="entry u" data-cat="msg"><span class="t">21:01:09</span><span class="k">用户</span><div class="b"><div class="txt">同一份正文存三遍，怎么去重？</div></div><button class="more" data-detail="d-msg">⋯</button></div>
+                <div class="entry a" data-cat="msg"><span class="t">21:01:44</span><span class="k">助手</span><div class="b"><div class="txt">三种：停写重复列、迁移时删列、新建表搬数据。推荐第一种：查询本来就要改，老数据靠 7 天保留期自然淘汰。</div></div><button class="more" data-detail="d-msg">⋯</button></div>
+              </div>
+            </div>
+
+            <div class="turn" data-turn="22">
+              <button class="turn-head" aria-expanded="false"><span class="twist">▸</span><span class="idx">Turn 22</span><span class="sum">把事件保留清单列出来</span><span class="stats"><span>21:05</span><span>1 工具</span><span>↑ 19K ↓ 840</span><span>$ 0.04</span></span></button>
+              <div class="turn-body">
+                <div class="entry u" data-cat="msg"><span class="t">21:05:12</span><span class="k">用户</span><div class="b"><div class="txt">哪些事件还要留？</div></div><button class="more" data-detail="d-msg">⋯</button></div>
+                <div class="entry a" data-cat="msg"><span class="t">21:05:30</span><span class="k">助手</span><div class="b"><div class="txt">会话、运行、工具起止、请求/响应、模型切换、探针健康。message_* 和 turn_* 全部删掉。</div><div class="tchips"><span class="tchip">→ read</span></div></div><button class="more" data-detail="d-msg">⋯</button></div>
+              </div>
+            </div>
+
+            <div class="turn" data-turn="23">
+              <button class="turn-head" aria-expanded="false"><span class="twist">▸</span><span class="idx">Turn 23</span><span class="sum">确认轮询 1 秒</span><span class="stats"><span>21:08</span><span>0 工具</span><span>↑ 13K ↓ 260</span><span>$ 0.02</span></span></button>
+              <div class="turn-body">
+                <div class="entry u" data-cat="msg"><span class="t">21:08:04</span><span class="k">用户</span><div class="b"><div class="txt">轮询间隔定 1 秒。</div></div><button class="more" data-detail="d-msg">⋯</button></div>
+                <div class="entry a" data-cat="msg"><span class="t">21:08:09</span><span class="k">助手</span><div class="b"><div class="txt">记下了。只 stat + 从偏移读，文件没变时零解析，1 秒的读放大可以接受。</div></div><button class="more" data-detail="d-msg">⋯</button></div>
+              </div>
+            </div>
+
+            <div class="turn" data-turn="24">
+              <button class="turn-head" aria-expanded="false"><span class="twist">▸</span><span class="idx">Turn 24</span><span class="sum">回填和实时读取的边界</span><span class="stats"><span>21:11</span><span>2 工具</span><span>↑ 24K ↓ 690</span><span>$ 0.05</span></span></button>
+              <div class="turn-body">
+                <div class="entry u" data-cat="msg"><span class="t">21:11:20</span><span class="k">用户</span><div class="b"><div class="txt">回填还要不要做？</div></div><button class="more" data-detail="d-msg">⋯</button></div>
+                <div class="entry a" data-cat="msg"><span class="t">21:11:48</span><span class="k">助手</span><div class="b"><div class="txt">回填就是读文件入库，改造后它是唯一的内容路径；能删的是实时正文事件和两套渲染的合并逻辑。</div><div class="tchips"><span class="tchip">→ read</span></div></div><button class="more" data-detail="d-msg">⋯</button></div>
+              </div>
+            </div>
+
+            <div class="turn" data-turn="25">
+              <button class="turn-head" aria-expanded="false"><span class="twist">▸</span><span class="idx">Turn 25</span><span class="sum">画目标数据流</span><span class="stats"><span>21:15</span><span>1 工具</span><span>↑ 15K ↓ 520</span><span>$ 0.03</span></span></button>
+              <div class="turn-body">
+                <div class="entry u" data-cat="msg"><span class="t">21:15:02</span><span class="k">用户</span><div class="b"><div class="txt">把改造后的数据流画出来。</div></div><button class="more" data-detail="d-msg">⋯</button></div>
+                <div class="entry a" data-cat="msg"><span class="t">21:15:20</span><span class="k">助手</span><div class="b"><div class="txt">Pi 写 JSONL → 增量读取 → messages 唯一副本；探针只写 events / turns / tool_calls / llm_requests；时间线按条目排序渲染。</div></div><button class="more" data-detail="d-msg">⋯</button></div>
+              </div>
+            </div>
+
+            <div class="turn" data-turn="26">
+              <button class="turn-head" aria-expanded="false"><span class="twist">▸</span><span class="idx">Turn 26</span><span class="sum">删掉 message_* 事件的影响面</span><span class="stats"><span>21:18</span><span>3 工具</span><span>↑ 31K ↓ 940</span><span>$ 0.06</span></span></button>
+              <div class="turn-body">
+                <div class="entry u" data-cat="msg"><span class="t">21:18:10</span><span class="k">用户</span><div class="b"><div class="txt">删掉这些事件，页面会缺什么？</div></div><button class="more" data-detail="d-msg">⋯</button></div>
+                <div class="entry a" data-cat="msg"><span class="t">21:18:52</span><span class="k">助手</span><div class="b"><div class="txt">什么也不缺：正文、思考、工具参数都在文件条目里。唯一缺的是生成中的实时文字，而这个本来就不要。</div><div class="tchips"><span class="tchip">→ grep</span><span class="tchip">→ read</span></div></div><button class="more" data-detail="d-msg">⋯</button></div>
+              </div>
+            </div>
+
+            <div class="turn" data-turn="27">
+              <button class="turn-head" aria-expanded="false"><span class="twist">▸</span><span class="idx">Turn 27</span><span class="sum">检查 message_end 的角色</span><span class="stats"><span>21:22</span><span>1 工具</span><span>↑ 17K ↓ 610</span><span>$ 0.03</span></span></button>
+              <div class="turn-body">
+                <div class="entry u" data-cat="msg"><span class="t">21:22:05</span><span class="k">用户</span><div class="b"><div class="txt">要不要改成订阅 message_end？</div></div><button class="more" data-detail="d-msg">⋯</button></div>
+                <div class="entry a" data-cat="msg"><span class="t">21:22:26</span><span class="k">助手</span><div class="b"><div class="txt">不需要。以文件为主之后，连 message_end 都是重复的：同一份内容会在文件里出现一次。</div></div><button class="more" data-detail="d-msg">⋯</button></div>
+              </div>
+            </div>
+
+            <div class="turn" data-turn="28">
+              <button class="turn-head" aria-expanded="false"><span class="twist">▸</span><span class="idx">Turn 28</span><span class="sum">比较 1 秒和 2 秒轮询的读放大</span><span class="stats"><span>21:25</span><span>2 工具</span><span>↑ 26K ↓ 700</span><span>$ 0.05</span></span></button>
+              <div class="turn-body">
+                <div class="entry u" data-cat="msg"><span class="t">21:25:15</span><span class="k">用户</span><div class="b"><div class="txt">每秒读一次会不会太频繁？</div></div><button class="more" data-detail="d-msg">⋯</button></div>
+                <div class="entry a" data-cat="msg"><span class="t">21:25:48</span><span class="k">助手</span><div class="b"><div class="txt">读的是 stat + 尾部增量，不是整文件；大会话的解析次数由写入次数决定，不由轮询次数决定。</div><div class="tchips"><span class="tchip">→ read</span></div></div><button class="more" data-detail="d-msg">⋯</button></div>
+              </div>
+            </div>
+
+            <div class="turn" data-turn="29">
+              <button class="turn-head" aria-expanded="false"><span class="twist">▸</span><span class="idx">Turn 29</span><span class="sum">定稿重构四步</span><span class="stats"><span>21:30</span><span>0 工具</span><span>↑ 14K ↓ 880</span><span>$ 0.03</span></span></button>
+              <div class="turn-body">
+                <div class="entry u" data-cat="msg"><span class="t">21:30:02</span><span class="k">用户</span><div class="b"><div class="txt">讨论得差不多了。</div></div><button class="more" data-detail="d-msg">⋯</button></div>
+                <div class="entry a" data-cat="msg"><span class="t">21:30:20</span><span class="k">助手</span><div class="b"><div class="txt">收拢成四步：数据路径、行模型与查询、单页 UI、清理与验收。每步单独验收。</div></div><button class="more" data-detail="d-msg">⋯</button></div>
+              </div>
+            </div>
+
+            <!-- ---------- 分叉示例 ---------- -->
+            <div class="turn" data-turn="30">
+              <button class="turn-head" aria-expanded="false"><span class="twist">▸</span><span class="idx">Turn 30</span><span class="sum">分叉方案：只留摘要，不存全文</span><span class="stats"><span>21:34</span><span>2 工具</span><span>↑ 21K ↓ 1.2K</span><span>$ 0.04</span></span></button>
+              <div class="turn-body">
+                <div class="entry u" data-cat="msg"><span class="t">21:34:06</span><span class="k">用户</span><div class="b"><div class="txt">先别急着定，试试只留摘要的方案。</div></div><button class="more" data-detail="d-msg">⋯</button></div>
+                <div class="entry a" data-cat="msg"><span class="t">21:34:18</span><span class="k">助手</span><div class="b"><div class="txt">可以，但摘要会让时间线丢掉原文。先做个分支对比。</div><div class="tchips"><span class="tchip">→ edit</span></div></div><button class="more" data-detail="d-msg">⋯</button></div>
+                <div class="entry tool" data-cat="msg"><span class="t">21:34:31</span><span class="k">工具</span><div class="b"><div class="tr-head"><span class="name">edit</span><span class="cmd">docs/retention.md</span><span class="badge ok sm">成功</span><span class="faint">96 ms</span></div><pre class="out">3 处替换：payload 改为摘要，正文不再入库。</pre></div><button class="more" data-detail="d-tool">⋯</button></div>
+                <div class="entry a off" data-cat="msg"><span class="t">21:35:02</span><span class="k">助手</span><div class="b"><div class="txt">（分支）只保留摘要，正文不入库；7 天后连摘要一起删。</div> <span class="badge sm">其它分支</span></div><button class="more" data-detail="d-msg">⋯</button></div>
+                <div class="entry a" data-cat="msg"><span class="t">21:36:10</span><span class="k">助手</span><div class="b"><div class="txt">回到主分支：正文保留 7 天，事件只留文件没有的信息。</div></div><button class="more" data-detail="d-msg">⋯</button></div>
+              </div>
+            </div>
+
+            <div class="turn" data-turn="31">
+              <button class="turn-head" aria-expanded="false"><span class="twist">▸</span><span class="idx">Turn 31</span><span class="sum">上下文压缩到 62%</span><span class="stats"><span>21:38</span><span>1 工具</span><span>↑ 18K ↓ 460</span><span>$ 0.03</span></span></button>
+              <div class="turn-body">
+                <div class="entry sys" data-cat="session"><span class="t">21:38:01</span><span class="k">系统</span><div class="b"><span class="badge sm amber">压缩</span> 21 条 → 1 条摘要 · 12 KB <span class="faint">· 来自会话文件</span></div><span></span></div>
+                <div class="entry a" data-cat="msg"><span class="t">21:38:04</span><span class="k">助手</span><div class="b"><div class="txt">压缩完成：前半段对话变成一条摘要，后面的 Turn 不受影响，原文仍保留在文件里。</div></div><button class="more" data-detail="d-msg">⋯</button></div>
+              </div>
+            </div>
+
+            <!-- ---------- 失败示例 ---------- -->
+            <div class="turn failed" data-turn="32">
+              <button class="turn-head" aria-expanded="false"><span class="twist">▸</span><span class="idx">Turn 32</span><span class="sum">跑 pnpm dev 失败：路径写错</span><span class="stats"><span class="badge err sm">失败</span><span>21:42</span><span>2 工具</span><span>↑ 19K ↓ 720</span><span>$ 0.03</span></span></button>
+              <div class="turn-body">
+                <div class="entry u" data-cat="msg"><span class="t">21:42:02</span><span class="k">用户</span><div class="b"><div class="txt">跑一下 dev 看看。</div></div><button class="more" data-detail="d-msg">⋯</button></div>
+                <div class="entry a" data-cat="msg"><span class="t">21:42:08</span><span class="k">助手</span><div class="b"><div class="txt">先启动开发服务器。</div><div class="tchips"><span class="tchip">→ bash</span></div></div><button class="more" data-detail="d-msg">⋯</button></div>
+                <div class="entry tool" data-cat="msg"><span class="t">21:42:09</span><span class="k">工具</span><div class="b"><div class="tr-head"><span class="name">bash</span><span class="cmd">pnpm run dev</span><span class="badge err sm">失败</span><span class="faint">6.1 s · exit 1</span></div><pre class="out err">Error: Module not found: Can't resolve './lib/languages'
+  at /lib/highlight.ts:18:15
+
+Command exited with code 1</pre></div><button class="more" data-detail="d-tool">⋯</button></div>
+                <div class="entry a" data-cat="msg"><span class="t">21:42:16</span><span class="k">助手</span><div class="b"><div class="txt">路径写错了：动态导入应该是 <code>./languages</code>，不是 <code>./lib/languages</code>。先不改代码。</div></div><button class="more" data-detail="d-msg">⋯</button></div>
+                <div class="entry ev" data-cat="run"><span class="t">21:42:17</span><span class="k ev">settled</span><div class="b">agent_settled · stopReason: stop <span class="faint">· 钩子事件，文件里没有</span></div><span></span></div>
+              </div>
+            </div>
+
+            <div class="turn" data-turn="33">
+              <button class="turn-head" aria-expanded="false"><span class="twist">▸</span><span class="idx">Turn 33</span><span class="sum">存储去重这次就做</span><span class="stats"><span>21:46</span><span>3 工具</span><span>↑ 28K ↓ 1.1K</span><span>$ 0.05</span></span></button>
+              <div class="turn-body">
+                <div class="entry u" data-cat="msg"><span class="t">21:46:02</span><span class="k">用户</span><div class="b"><div class="txt">存储去重这次就做。</div></div><button class="more" data-detail="d-msg">⋯</button></div>
+                <div class="entry ev" data-cat="model"><span class="t">21:46:02</span><span class="k ev">provider →</span><div class="b">deepseek · openai-completions · deepseek-v4-pro <span class="faint">· 请求 #32 · 124 KB（脱敏）</span></div><button class="more" data-detail="d-req">⋯</button></div>
+                <div class="entry ev" data-cat="model"><span class="t">21:46:04</span><span class="k ev">provider ←</span><div class="b">200 OK · 1.9 s <span class="faint">· 响应头已脱敏</span></div><span></span></div>
+                <div class="entry a" data-cat="msg"><span class="t">21:46:04</span><span class="k">助手</span><div class="b"><div class="txt">好，去重和查询改造一起做：先改写入路径，再改查询。</div><div class="tchips"><span class="tchip">→ read</span><span class="tchip">→ edit</span></div></div><button class="more" data-detail="d-msg">⋯</button></div>
+                <div class="entry tool" data-cat="msg"><span class="t">21:46:06</span><span class="k">工具</span><div class="b"><div class="tr-head"><span class="name">read</span><span class="cmd">src/lib/backfill.ts</span><span class="badge ok sm">成功</span><span class="faint">212 ms</span></div><pre class="out">984 行 · 回填与增量读取
+INSERT INTO turns (… assistant_message …) VALUES (…)</pre></div><button class="more" data-detail="d-tool">⋯</button></div>
+                <div class="entry tool" data-cat="msg"><span class="t">21:46:19</span><span class="k">工具</span><div class="b"><div class="tr-head"><span class="name">edit</span><span class="cmd">src/lib/queries.ts</span><span class="badge ok sm">成功</span><span class="faint">310 ms</span></div><pre class="out">5 处替换：缓存读写改为 join messages.payload 取 usage。</pre></div><button class="more" data-detail="d-tool">⋯</button></div>
+                <div class="entry a" data-cat="msg"><span class="t">21:46:31</span><span class="k">助手</span><div class="b"><div class="txt">改完了：turns 不再写 assistant_message，tool_calls 只留标量。单测 134 项全过。</div></div><button class="more" data-detail="d-msg">⋯</button></div>
+                <div class="entry ev" data-cat="run"><span class="t">21:46:32</span><span class="k ev">settled</span><div class="b">agent_settled · stopReason: stop <span class="faint">· 3 秒后已对账</span></div><span></span></div>
+              </div>
+            </div>
+
+            <!-- ---------- 进行中的 Turn ---------- -->
+            <div class="turn running open" data-turn="34">
+              <button class="turn-head" aria-expanded="true"><span class="twist">▾</span><span class="idx">Turn 34</span><span class="sum">还加个需求：亮、暗主题的切换</span><span class="stats"><span class="badge ok sm">进行中</span><span>21:50</span><span>2 工具</span><span>↑ 41K ↓ 2.1K</span><span>$ 0.07</span></span></button>
+              <div class="turn-body">
+                <div class="entry u" data-cat="msg"><span class="t">21:50:12</span><span class="k">用户</span><div class="b"><div class="txt">存储去重这次就做。然后你先更新原型，我看一眼，还加个需求，要考虑到亮、暗主题的切换，现在这样是暗的</div></div><button class="more" data-detail="d-msg">⋯</button></div>
+                <div class="entry ev" data-cat="model"><span class="t">21:50:12</span><span class="k ev">provider →</span><div class="b">deepseek · openai-completions · deepseek-v4-pro <span class="faint">· 请求 #33 · 128 KB（脱敏）</span></div><button class="more" data-detail="d-req">⋯</button></div>
+                <div class="entry ev" data-cat="model"><span class="t">21:50:15</span><span class="k ev">provider ←</span><div class="b">200 OK · 2.8 s <span class="faint">· 响应头已脱敏</span></div><span></span></div>
+                <div class="entry a" data-cat="msg"><span class="t">21:50:15</span><span class="k">助手</span><div class="b">
+                  <div class="txt">先看现有原型，再按新结构改，并加亮/暗切换。</div>
+                  <details class="think"><summary>思考 · 1.2 KB</summary><div class="think-body">主题切换要落在 token 层：深色是默认，亮色只覆盖变量，不改任何页面结构。顶栏加一个切换按钮，记住选择。</div></details>
+                  <div class="tchips"><span class="tchip">→ read</span><span class="tchip">→ bash</span></div>
+                </div><button class="more" data-detail="d-msg">⋯</button></div>
+                <div class="entry tool" data-cat="msg"><span class="t">21:50:16</span><span class="k">工具</span><div class="b"><div class="tr-head"><span class="name">read</span><span class="cmd">prototype/session.html</span><span class="badge ok sm">成功</span><span class="faint">186 ms</span></div><pre class="out">315 行 · 旧结构：左侧消息树 + 右侧三标签
+&lt;div class="session-layout"&gt;
+  &lt;div class="panel"&gt;消息树 …&lt;/div&gt;</pre></div><button class="more" data-detail="d-tool">⋯</button></div>
+                <div class="entry a" data-cat="msg"><span class="t">21:50:18</span><span class="k">助手</span><div class="b"><div class="txt">旧结构里树和时间线在渲染同一份数据，这次一并去掉。单页只留左列表 + 右时间线。</div><div class="tchips"><span class="tchip">→ edit</span></div></div><button class="more" data-detail="d-msg">⋯</button></div>
+                <div class="entry tool" data-cat="msg"><span class="t">21:50:22</span><span class="k">工具</span><div class="b"><div class="tr-head"><span class="name">edit</span><span class="cmd">prototype/index.html</span><span class="badge ok sm">成功</span><span class="faint">310 ms</span></div><pre class="out">重写为单页外壳：左栏 298px，右栏会话头 + 筛选 + 时间线。
+新增 data-theme="light" 的 token 覆盖。</pre></div><button class="more" data-detail="d-tool">⋯</button></div>
+                <div class="entry" data-cat="msg"><span class="t">21:50</span><span class="k">生成中</span><div class="b"><span class="pending"><span class="pulse"></span>等待助手写入会话文件…（不显示流式正文）</span></div><span></span></div>
+              </div>
+            </div>
+
+            <div class="tl-end" hidden data-tl-end>已到最早 · 共 34 个 Turn</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ---------------------------------------------------- 会话 2：无事件 -->
+      <div class="view" data-view="s2" hidden>
+        <div class="tl-scroll">
+          <div class="tl">
+            <div class="notice tl-note">
+              <span class="ic">◌</span>
+              <div><b style="color:var(--fg)">这个会话没有钩子事件</b>：它产生于安装探针之前。时间线完全来自会话文件，所以没有请求、工具起止等事件行。</div>
+            </div>
+
+            <div class="turn" data-turn="1">
+              <button class="turn-head" aria-expanded="false"><span class="twist">▸</span><span class="idx">Turn 1</span><span class="sum">读 PRD，确认保留策略</span><span class="stats"><span>10:04</span><span>0 工具</span><span>↑ 8.1K ↓ 420</span><span>$ 0.01</span></span></button>
+              <div class="turn-body">
+                <div class="entry u" data-cat="msg"><span class="t">10:04:02</span><span class="k">用户</span><div class="b"><div class="txt">读一下 PRD，确认保留策略。</div></div><button class="more" data-detail="d-msg">⋯</button></div>
+                <div class="entry a" data-cat="msg"><span class="t">10:04:09</span><span class="k">助手</span><div class="b"><div class="txt">PRD 写的是 payload 只保留 7 天，超期自动删除，不设总量上限。</div></div><button class="more" data-detail="d-msg">⋯</button></div>
+              </div>
+            </div>
+
+            <div class="turn" data-turn="2">
+              <button class="turn-head" aria-expanded="false"><span class="twist">▸</span><span class="idx">Turn 2</span><span class="sum">7 天还是 30 天？</span><span class="stats"><span>10:12</span><span>0 工具</span><span>↑ 9.4K ↓ 380</span><span>$ 0.02</span></span></button>
+              <div class="turn-body">
+                <div class="entry u" data-cat="msg"><span class="t">10:12:20</span><span class="k">用户</span><div class="b"><div class="txt">保留期到底 7 天还是 30 天？</div></div><button class="more" data-detail="d-msg">⋯</button></div>
+                <div class="entry a" data-cat="msg"><span class="t">10:12:26</span><span class="k">助手</span><div class="b"><div class="txt">PRD §8.6 是 7 天；会话文件本身不动，Pi 自己决定留多久。</div></div><button class="more" data-detail="d-msg">⋯</button></div>
+              </div>
+            </div>
+
+            <div class="turn" data-turn="3">
+              <button class="turn-head" aria-expanded="false"><span class="twist">▸</span><span class="idx">Turn 3</span><span class="sum">确认不设总量上限</span><span class="stats"><span>10:20</span><span>0 工具</span><span>↑ 10.2K ↓ 310</span><span>$ 0.02</span></span></button>
+              <div class="turn-body">
+                <div class="entry u" data-cat="msg"><span class="t">10:20:05</span><span class="k">用户</span><div class="b"><div class="txt">总量也不设上限？</div></div><button class="more" data-detail="d-msg">⋯</button></div>
+                <div class="entry a" data-cat="msg"><span class="t">10:20:11</span><span class="k">助手</span><div class="b"><div class="txt">不设。只按时间淘汰；磁盘占用随会话量增长，这是明确的取舍。</div></div><button class="more" data-detail="d-msg">⋯</button></div>
+              </div>
+            </div>
+
+            <div class="turn" data-turn="4">
+              <button class="turn-head" aria-expanded="false"><span class="twist">▸</span><span class="idx">Turn 4</span><span class="sum">把结论写进 PRD §8.6</span><span class="stats"><span>10:31</span><span>0 工具</span><span>↑ 11K ↓ 260</span><span>$ 0.02</span></span></button>
+              <div class="turn-body">
+                <div class="entry u" data-cat="msg"><span class="t">10:31:02</span><span class="k">用户</span><div class="b"><div class="txt">把结论写进 PRD。</div></div><button class="more" data-detail="d-msg">⋯</button></div>
+                <div class="entry a" data-cat="msg"><span class="t">10:31:08</span><span class="k">助手</span><div class="b"><div class="txt">已补到 §8.6：7 天、无总量上限、清理任务启动时跑一次。</div></div><button class="more" data-detail="d-msg">⋯</button></div>
+              </div>
+            </div>
+
+            <div class="turn open" data-turn="5">
+              <button class="turn-head" aria-expanded="true"><span class="twist">▾</span><span class="idx">Turn 5</span><span class="sum">清理任务什么时候跑？</span><span class="stats"><span>10:44</span><span>0 工具</span><span>↑ 9.8K ↓ 300</span><span>$ 0.02</span></span></button>
+              <div class="turn-body">
+                <div class="entry u" data-cat="msg"><span class="t">10:44:15</span><span class="k">用户</span><div class="b"><div class="txt">清理任务什么时候跑？</div></div><button class="more" data-detail="d-msg">⋯</button></div>
+                <div class="entry a" data-cat="msg"><span class="t">10:44:21</span><span class="k">助手</span><div class="b"><div class="txt">服务启动时跑一次，之后每小时一次；VACUUM 每天一次。这里没有事件行，因为这些信息都在文件里。</div></div><button class="more" data-detail="d-msg">⋯</button></div>
+              </div>
+            </div>
+
+            <div class="tl-end">已到最早 · 共 5 个 Turn</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ---------------------------------------------------- 会话 3 -->
+      <div class="view" data-view="s3" hidden>
+        <div class="tl-scroll">
+          <div class="tl">
+            <div class="turn" data-turn="1">
+              <button class="turn-head" aria-expanded="false"><span class="twist">▸</span><span class="idx">Turn 1</span><span class="sum">语法高亮为什么首屏不加载</span><span class="stats"><span>09:12</span><span>2 工具</span><span>↑ 4.1K ↓ 320</span><span>$ 0.01</span></span></button>
+              <div class="turn-body">
+                <div class="entry u" data-cat="msg"><span class="t">09:12:03</span><span class="k">用户</span><div class="b"><div class="txt">编辑器首屏为什么不带语法高亮？</div></div><button class="more" data-detail="d-msg">⋯</button></div>
+                <div class="entry a" data-cat="msg"><span class="t">09:12:12</span><span class="k">助手</span><div class="b"><div class="txt">高亮器是动态 import 的，首屏只渲染纯文本，等空闲后才加载语言包。</div><div class="tchips"><span class="tchip">→ read</span></div></div><button class="more" data-detail="d-msg">⋯</button></div>
+              </div>
+            </div>
+            <div class="turn" data-turn="2">
+              <button class="turn-head" aria-expanded="false"><span class="twist">▸</span><span class="idx">Turn 2</span><span class="sum">动态 import 拆包</span><span class="stats"><span>09:16</span><span>1 工具</span><span>↑ 4.4K ↓ 280</span><span>$ 0.01</span></span></button>
+              <div class="turn-body">
+                <div class="entry u" data-cat="msg"><span class="t">09:16:20</span><span class="k">用户</span><div class="b"><div class="txt">拆成独立 chunk 会更快吗？</div></div><button class="more" data-detail="d-msg">⋯</button></div>
+                <div class="entry a" data-cat="msg"><span class="t">09:16:28</span><span class="k">助手</span><div class="b"><div class="txt">会。语言包从 42 KB 降到首屏 3 KB，代价是多一次请求。</div></div><button class="more" data-detail="d-msg">⋯</button></div>
+              </div>
+            </div>
+            <div class="turn" data-turn="3">
+              <button class="turn-head" aria-expanded="false"><span class="twist">▸</span><span class="idx">Turn 3</span><span class="sum">languages 目录路径</span><span class="stats"><span>09:21</span><span>3 工具</span><span>↑ 5.2K ↓ 460</span><span>$ 0.02</span></span></button>
+              <div class="turn-body">
+                <div class="entry u" data-cat="msg"><span class="t">09:21:02</span><span class="k">用户</span><div class="b"><div class="txt">语言包目录怎么引用？</div></div><button class="more" data-detail="d-msg">⋯</button></div>
+                <div class="entry a" data-cat="msg"><span class="t">09:21:15</span><span class="k">助手</span><div class="b"><div class="txt">用相对当前文件的 <code>./languages</code>，不要写成 <code>./lib/languages</code>。</div><div class="tchips"><span class="tchip">→ read</span></div></div><button class="more" data-detail="d-msg">⋯</button></div>
+              </div>
+            </div>
+            <div class="turn" data-turn="4">
+              <button class="turn-head" aria-expanded="false"><span class="twist">▸</span><span class="idx">Turn 4</span><span class="sum">首屏体积 42 KB</span><span class="stats"><span>09:25</span><span>1 工具</span><span>↑ 4.8K ↓ 240</span><span>$ 0.01</span></span></button>
+              <div class="turn-body">
+                <div class="entry u" data-cat="msg"><span class="t">09:25:10</span><span class="k">用户</span><div class="b"><div class="txt">现在首屏多少？</div></div><button class="more" data-detail="d-msg">⋯</button></div>
+                <div class="entry a" data-cat="msg"><span class="t">09:25:16</span><span class="k">助手</span><div class="b"><div class="txt">42 KB，主要是编辑器和主题样式；高亮器已移出。</div></div><button class="more" data-detail="d-msg">⋯</button></div>
+              </div>
+            </div>
+            <div class="turn" data-turn="5">
+              <button class="turn-head" aria-expanded="false"><span class="twist">▸</span><span class="idx">Turn 5</span><span class="sum">补一个失败回退</span><span class="stats"><span>09:31</span><span>2 工具</span><span>↑ 5.0K ↓ 300</span><span>$ 0.01</span></span></button>
+              <div class="turn-body">
+                <div class="entry u" data-cat="msg"><span class="t">09:31:05</span><span class="k">用户</span><div class="b"><div class="txt">语言包加载失败怎么办？</div></div><button class="more" data-detail="d-msg">⋯</button></div>
+                <div class="entry a" data-cat="msg"><span class="t">09:31:14</span><span class="k">助手</span><div class="b"><div class="txt">失败就停在纯文本，不阻塞编辑；控制台记一条 warn。</div></div><button class="more" data-detail="d-msg">⋯</button></div>
+              </div>
+            </div>
+            <div class="turn" data-turn="6">
+              <button class="turn-head" aria-expanded="false"><span class="twist">▸</span><span class="idx">Turn 6</span><span class="sum">收尾：删掉旧 loader</span><span class="stats"><span>09:34</span><span>1 工具</span><span>↑ 3.9K ↓ 220</span><span>$ 0.01</span></span></button>
+              <div class="turn-body">
+                <div class="entry u" data-cat="msg"><span class="t">09:34:02</span><span class="k">用户</span><div class="b"><div class="txt">旧的 loader 可以删了吗？</div></div><button class="more" data-detail="d-msg">⋯</button></div>
+                <div class="entry a" data-cat="msg"><span class="t">09:34:09</span><span class="k">助手</span><div class="b"><div class="txt">可以，已经没有任何引用。删掉后首屏再少 2 KB。</div></div><button class="more" data-detail="d-msg">⋯</button></div>
+              </div>
+            </div>
+            <div class="tl-end">已到最早 · 共 6 个 Turn</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ---------------------------------------------------- 未展开的会话 -->
+      <div class="view" data-view="empty" hidden>
+        <div class="tl-scroll">
+          <div class="tl">
+            <div class="empty" style="padding:60px 12px">原型只展开了前三个会话的时间线；其余会话沿用同一套结构。</div>
+          </div>
+        </div>
+      </div>
+
+    </main>
+  </div>
+
+  <!-- ===================== 状态栏 ===================== -->
+  <div class="statusbar">
+    <div class="statusbar-inner">
+      <span class="item"><span class="dot-sm" style="color:var(--green)"></span>探针已连接</span>
+      <span class="item">最近推送 <span style="color:var(--fg)">1 秒前</span></span>
+      <span class="item">队列 <span style="color:var(--fg)">2 / 2000</span></span>
+      <span class="item">累计丢弃 <span style="color:var(--fg)">0</span></span>
+      <span class="spacer"></span>
+      <span class="item faint">真相源为会话 JSONL · 每秒增量读取 · 数据仅存本机 127.0.0.1:4173</span>
     </div>
   </div>
+
 </div>
 
-<!-- ===================== 状态栏 ===================== -->
-<div class="statusbar">
-  <div class="statusbar-inner">
-    <span class="item"><span class="dot-sm" style="color:var(--green)"></span>探针已连接</span>
-    <span class="item">最近推送 <span style="color:var(--fg)">2 秒前</span></span>
-    <span class="item">队列 <span style="color:var(--fg)">3 / 2000</span></span>
-    <span class="item">累计丢弃 <span style="color:var(--fg)">0</span></span>
-    <span class="spacer"></span>
-    <span class="item faint">数据仅存本机 127.0.0.1:4173</span>
-  </div>
+<!-- ===================== 详情弹窗 ===================== -->
+<div class="modal" data-modal hidden>
+  <div class="modal-backdrop" data-close></div>
+  <div class="modal-panel" data-modal-panel role="dialog" aria-modal="true" aria-label="行详情"></div>
 </div>
+
+<!-- ===================== 详情内容模板 ===================== -->
+
+<template id="d-msg">
+  <div class="modal-head">
+    <span class="badge violet">文件条目</span>
+    <h2>assistant · 1790809a</h2>
+    <button class="btn ghost x" data-close aria-label="关闭">✕</button>
+  </div>
+  <div class="modal-meta">
+    <dl class="kv">
+      <dt>entry_id</dt><dd>1790809a</dd>
+      <dt>parent_id</dt><dd>5f0c7731</dd>
+      <dt>文件行号</dt><dd>512</dd>
+    </dl>
+    <dl class="kv">
+      <dt>时间</dt><dd>2026-10-19 21:50:15</dd>
+      <dt>分支</dt><dd><span class="badge ok sm">当前分支</span></dd>
+      <dt>字节</dt><dd>1054</dd>
+    </dl>
+  </div>
+  <div class="modal-body" data-tabgroup>
+    <div class="tabs">
+      <button class="on" data-tab="c">内容</button>
+      <button data-tab="j">原始 JSON</button>
+      <button data-tab="e">关联事件</button>
+    </div>
+    <div class="tabpanel on" data-panel="c">
+      <div class="label" style="margin-bottom:6px">text</div>
+      <p style="white-space:pre-wrap">先看现有原型，再按新结构改，并加亮/暗切换。</p>
+      <div class="label" style="margin:12px 0 6px">thinking</div>
+      <div class="pre">主题切换要落在 token 层：深色是默认，亮色只覆盖变量，不改任何页面结构。</div>
+      <div class="label" style="margin:12px 0 6px">toolCall</div>
+      <div class="pre">{ "name": "read", "arguments": { "path": "prototype/session.html" } }
+{ "name": "bash", "arguments": { "command": "ls prototype" } }</div>
+    </div>
+    <div class="tabpanel" data-panel="j">
+      <pre class="pre">{
+  "type": "message",
+  "id": "1790809a",
+  "parentId": "5f0c7731",
+  "timestamp": "2026-10-19T13:50:15.208Z",
+  "message": {
+    "role": "assistant",
+    "content": [
+      { "type": "text", "text": "先看现有原型，再按新结构改，并加亮/暗切换。" },
+      { "type": "toolCall", "id": "call_8f21", "name": "read", "arguments": { "path": "prototype/session.html" } }
+    ],
+    "usage": { "input": 41012, "output": 2100, "cacheRead": 38000, "cacheWrite": 0 }
+  }
+}</pre>
+    </div>
+    <div class="tabpanel" data-panel="e">
+      <div class="empty">这一条没有直接关联的钩子事件。</div>
+    </div>
+  </div>
+  <div class="modal-foot">正文、思考与工具参数都来自会话文件；去重后这是唯一一份。探针不再推送 <code>message_*</code> 事件。</div>
+</template>
+
+<template id="d-tool">
+  <div class="modal-head">
+    <span class="badge">文件条目 · toolResult</span>
+    <h2>bash · 8f21c0d4</h2>
+    <button class="btn ghost x" data-close aria-label="关闭">✕</button>
+  </div>
+  <div class="modal-meta">
+    <dl class="kv">
+      <dt>toolCallId</dt><dd>call_8f21</dd>
+      <dt>toolName</dt><dd>bash</dd>
+      <dt>耗时</dt><dd>6.1 s</dd>
+    </dl>
+    <dl class="kv">
+      <dt>状态</dt><dd><span class="badge err sm">isError</span></dd>
+      <dt>关联 Turn</dt><dd>Turn 32</dd>
+      <dt>entry_id</dt><dd>8f21c0d4</dd>
+    </dl>
+  </div>
+  <div class="modal-body" data-tabgroup>
+    <div class="tabs">
+      <button class="on" data-tab="r">结果</button>
+      <button data-tab="a">参数</button>
+      <button data-tab="j">原始 JSON</button>
+    </div>
+    <div class="tabpanel on" data-panel="r">
+      <pre class="pre err">Error: Module not found: Can't resolve './lib/languages'
+  at /lib/highlight.ts:18:15
+
+Command exited with code 1</pre>
+    </div>
+    <div class="tabpanel" data-panel="a">
+      <pre class="pre">{ "command": "pnpm run dev", "timeout": 60000 }</pre>
+      <div class="faint" style="font-size:10.5px;margin-top:6px">参数来自同 Turn 助手条目的 <code>toolCall</code> 块，不在 toolResult 条目里。</div>
+    </div>
+    <div class="tabpanel" data-panel="j">
+      <pre class="pre">{
+  "type": "message",
+  "id": "8f21c0d4",
+  "parentId": "1790809a",
+  "message": {
+    "role": "toolResult",
+    "toolCallId": "call_8f21",
+    "toolName": "bash",
+    "isError": true,
+    "durationMs": 6104,
+    "content": [ { "type": "text", "text": "Error: Module not found…" } ]
+  }
+}</pre>
+    </div>
+  </div>
+  <div class="modal-foot"><code>tool_calls</code> 只存标量（名称、耗时、状态）；参数与结果按 id 从 <code>messages.payload</code> 取。</div>
+</template>
+
+<template id="d-req">
+  <div class="modal-head">
+    <span class="badge warn">钩子事件</span>
+    <h2>before_provider_request · #33</h2>
+    <button class="btn ghost x" data-close aria-label="关闭">✕</button>
+  </div>
+  <div class="modal-meta">
+    <dl class="kv">
+      <dt>会话内序号</dt><dd>33</dd>
+      <dt>provider</dt><dd>deepseek</dd>
+      <dt>api</dt><dd>openai-completions</dd>
+    </dl>
+    <dl class="kv">
+      <dt>model</dt><dd>deepseek-v4-pro</dd>
+      <dt>payload</dt><dd>128 KB（脱敏）</dd>
+      <dt>时间</dt><dd>21:50:12</dd>
+    </dl>
+  </div>
+  <div class="modal-body" data-tabgroup>
+    <div class="tabs">
+      <button class="on" data-tab="o">概览</button>
+      <button data-tab="p">请求体</button>
+      <button data-tab="h">响应头</button>
+    </div>
+    <div class="tabpanel on" data-panel="o">
+      <dl class="kv">
+        <dt>关联条目</dt><dd>1790809a（助手回复）</dd>
+        <dt>关联 Turn</dt><dd>Turn 34</dd>
+        <dt>响应</dt><dd><span class="badge ok sm">200</span> 2.8 s</dd>
+        <dt>说明</dt><dd class="faint">请求 / 响应按会话内顺序配对，没有共享请求 ID。</dd>
+      </dl>
+    </div>
+    <div class="tabpanel" data-panel="p">
+      <pre class="pre">{
+  "model": "deepseek-v4-pro",
+  "stream": true,
+  "messages": [
+    { "role": "system", "content": "[已脱敏 · 12 KB]" },
+    { "role": "user", "content": "存储去重这次就做。然后你先更新原型…" }
+  ],
+  "tools": [ { "name": "read" }, { "name": "edit" } ]
+}</pre>
+    </div>
+    <div class="tabpanel" data-panel="h">
+      <pre class="pre">HTTP/1.1 200 OK
+content-type: text/event-stream
+x-request-id: [已脱敏]
+server-timing: ttfb;dur=412</pre>
+    </div>
+  </div>
+  <div class="modal-foot">事件只补文件里没有的信息：请求与响应。payload 已脱敏，7 天后清空为 <code>{ "deleted": true }</code>。</div>
+</template>
+
 <script src="app.js"></script>
 </body>
 </html>
