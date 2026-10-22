@@ -42,9 +42,17 @@ const cleanup = async () => {
   rmSync(dataDir, { recursive: true, force: true });
 };
 
-/** 跑一次真实 Pi，返回退出码、stdout、stderr 与探针打印的请求摘要 */
+/**
+ * 跑一次真实 Pi，返回退出码、stdout、stderr 与探针记下的请求摘要。
+ *
+ * 探针默认只把日志写文件（`data/probe.log`），不打进用户的终端——
+ * 所以这里从日志文件里读，而不是从 stderr。
+ */
 async function runPi(args, label) {
   console.log(`\n=== ${label} ===`);
+  const logPath = join(dataDir, "probe.log");
+  const before = existsSync(logPath) ? readFileSync(logPath, "utf8").length : 0;
+
   const child = spawn("pi", args, {
     cwd: REPO,
     env: {
@@ -63,14 +71,24 @@ async function runPi(args, label) {
   const code = await new Promise((resolve) => child.on("exit", (value) => resolve(value ?? -1)));
   console.log(`pi 退出码：${code}｜stdout：${stdout.trim().slice(0, 120).replace(/\n/g, " ")}`);
 
-  const logged = [...stderr.matchAll(/请求 #(\d+)：原始 (\d+) 字节，脱敏 (\d+) 处，存 (\d+) 字节/g)].map((match) => ({
+  // 只取本次运行新追加的那段
+  let fresh = "";
+  try {
+    fresh = readFileSync(logPath, "utf8").slice(before);
+  } catch {
+    fresh = "";
+  }
+  const logged = [...fresh.matchAll(/请求 #(\d+)：原始 (\d+) 字节，脱敏 (\d+) 处，存 (\d+) 字节/g)].map((match) => ({
     seq: Number(match[1]),
     originalBytes: Number(match[2]),
     redacted: Number(match[3]),
     storedBytes: Number(match[4]),
   }));
   if (logged.length === 0) {
-    console.error(`探针没有打印请求摘要。stderr 前 500 字：\n${stderr.slice(0, 500)}`);
+    console.error(`探针没有记下请求摘要。日志尾部：\n${fresh.slice(-500)}`);
+  }
+  if (stderr.trim() !== "") {
+    console.error(`pi stderr（前 300 字）：${stderr.trim().slice(0, 300).replace(/\n/g, " ")}`);
   }
   return { code, stdout, stderr, logged };
 }

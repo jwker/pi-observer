@@ -25,8 +25,10 @@ export interface ProbeConfig {
   maxQueueBytes: number;
   /** 单条记录上限（PRD §7.4：512 KB） */
   maxRecordBytes: number;
-  /** 每次模型请求往终端打一行采集摘要（长度 / 脱敏数 / 是否截断），默认关闭 */
+  /** 每次模型请求往日志写一行采集摘要（长度 / 脱敏数 / 是否截断），默认关闭 */
   debugRequests: boolean;
+  /** 同时把探针日志打到 stderr（默认只写 data/probe.log，不打扰用户的终端） */
+  debug: boolean;
 }
 
 function intFromEnv(raw: string | undefined, fallback: number): number {
@@ -63,5 +65,6 @@ export function loadProbeConfig(env: Record<string, string | undefined> = proces
     maxQueueBytes: intFromEnv(env.PI_OBSERVER_MAX_QUEUE_BYTES, 64 * 1024 * 1024),
     maxRecordBytes: intFromEnv(env.PI_OBSERVER_MAX_RECORD_BYTES, 512 * 1024),
     debugRequests: boolFromEnv(env.PI_OBSERVER_DEBUG_REQUESTS, false),
+    debug: boolFromEnv(env.PI_OBSERVER_DEBUG, false),
   };
 }

@@ -32,3 +32,18 @@ export function log(level: LogLevel, scope: string, msg: string, extra?: Record<
 export function recentLogs(limit = 50): LogEntry[] {
   return ring.slice(-limit).map((e) => ({ ...e }));
 }
+
+/**
+ * 最近的 warn / error 条目（环形缓冲里筛一遍）。
+ *
+ * 存在的理由：服务端拒批原因（协议不匹配、批次校验失败、令牌不对、批次过大）只写 stderr，
+ * 而 stderr 连的是启动它的终端，浏览器里看不到——于是探针那边只显示「批次被拒绝，已丢弃 N 条」，
+ * 看板的 `dropped_count` 又因为探针从未成功上报而一直是 0，两个出口都看不出原因。
+ * `/api/health` 把这里的结果带出去，下一次再发生就能直接在页面上看到。
+ */
+export function recentProblems(limit = 10): LogEntry[] {
+  return ring
+    .filter((entry) => entry.level === "warn" || entry.level === "error")
+    .slice(-limit)
+    .map((entry) => ({ ...entry }));
+}

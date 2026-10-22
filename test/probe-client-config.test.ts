@@ -47,14 +47,14 @@ test("postBatch：2xx 视为成功并带回落库统计", async () => {
   if (outcome.ok) assert.equal(outcome.applied.event, 1);
 });
 
-test("postBatch：5xx 与网络错误可重试，401/400/413 不可重试", async () => {
+test("postBatch：5xx / 401 / 404 / 405 / 网络错误可重试，400 / 413 不可重试", async () => {
   const serverError = await postBatch({
     url: "u",
     token: "t",
     batch,
     fetchImpl: async () => fakeResponse(500, "boom"),
   });
-  assert.deepEqual(serverError, { ok: false, retryable: true, reason: "HTTP 500 boom" });
+  assert.deepEqual(serverError, { ok: false, retryable: true, reason: "HTTP 500 boom", status: 500 });
 
   const networkError = await postBatch({
     url: "u",
@@ -67,7 +67,21 @@ test("postBatch：5xx 与网络错误可重试，401/400/413 不可重试", asyn
   assert.equal(networkError.ok, false);
   if (!networkError.ok) assert.equal(networkError.retryable, true);
 
-  for (const status of [400, 401, 413]) {
+  // 401 / 404 / 405 都先重试：丢掉数据没有意义，而这三个状态经常是「令牌过期 / 路由暂时不存在」
+  for (const status of [401, 404, 405, 408, 429]) {
+    const retryable = await postBatch({
+      url: "u",
+      token: "t",
+      batch,
+      fetchImpl: async () => fakeResponse(status, "nope"),
+    });
+    assert.equal(retryable.ok, false);
+    if (!retryable.ok) assert.equal(retryable.retryable, true, `HTTP ${status} 该重试`);
+    if (!retryable.ok) assert.equal(retryable.status, status);
+  }
+
+  // 400（形状 / 协议不对）与 413（这批太大）重发还是一样 → 丢弃
+  for (const status of [400, 413]) {
     const fatal = await postBatch({
       url: "u",
       token: "t",
@@ -116,6 +130,7 @@ test("探针配置：默认地址、批量与队列上限", () => {
   assert.equal(config.maxQueueBytes, 64 * 1024 * 1024);
   assert.equal(config.maxRecordBytes, 512 * 1024);
   assert.equal(config.debugRequests, false);
+  assert.equal(config.debug, false, "默认不打 stderr，避免打扰用户的终端");
   assert.ok(config.tokenFile === defaultTokenFile());
   assert.ok(config.tokenFile.endsWith("/data/token"));
 });
@@ -127,6 +142,7 @@ test("探针配置：环境变量可覆盖地址与上限", () => {
     PI_OBSERVER_TOKEN_FILE: "/tmp/token",
     PI_OBSERVER_MAX_QUEUE_RECORDS: "5",
     PI_OBSERVER_DEBUG_REQUESTS: "1",
+    PI_OBSERVER_DEBUG: "1",
   });
   assert.equal(config.baseUrl, "http://127.0.0.1:9999");
   assert.equal(config.ingestUrl, "http://127.0.0.1:9999/api/ingest");
@@ -134,6 +150,7 @@ test("探针配置：环境变量可覆盖地址与上限", () => {
   assert.equal(config.tokenFile, "/tmp/token");
   assert.equal(config.maxQueueRecords, 5);
   assert.equal(config.debugRequests, true);
+  assert.equal(config.debug, true);
 });
 
 test("单条上限：超限给合法标记，capText 不切断多字节字符", () => {

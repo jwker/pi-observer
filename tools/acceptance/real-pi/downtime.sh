@@ -46,9 +46,18 @@ sleep $DOWN_SECONDS
 
 echo "=== 4. 探针/Pi 是否还活着 ==="
 if ps -p $PI_PID > /dev/null; then echo "Pi 进程存活（探针没把 Pi 拖崩）"; else echo "Pi 进程已退出"; fi
-echo "--- 探针 stderr 里 pi-observer 的日志行数 ---"
-grep -c "pi-observer" $OUT/pi.err | xargs echo "行数:"
-head -5 $OUT/pi.err
+echo "--- Pi 的 stderr 里有没有 pi-observer（应该没有）---"
+grep -c "pi-observer" $OUT/pi.err | xargs echo "stderr 行数:"
+head -3 $OUT/pi.err
+echo "--- 探针日志（默认写文件，不打终端）---"
+# 探针日志与令牌同目录；令牌在仓库 data/ 下，日志即 data/probe.log
+PROBE_LOG=$REPO/data/probe.log
+if [ -f "$PROBE_LOG" ]; then
+  echo "日志文件: $PROBE_LOG（行数 $(wc -l < $PROBE_LOG | tr -d ' ')）"
+  tail -3 $PROBE_LOG
+else
+  echo "没有日志文件（正常：本次运行没有异常）"
+fi
 
 echo "=== 5. 重启服务端 ==="
 nohup npx next start -H 127.0.0.1 -p $PORT > $OUT/server2.log 2>&1 &

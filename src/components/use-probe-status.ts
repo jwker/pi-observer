@@ -6,6 +6,16 @@ import type { ProbeStatusRow } from "@/lib/types.ts";
 import { useNow, useStreamEvent, useStreamStatus } from "./hooks.ts";
 import type { StreamStatus } from "./stream-client.ts";
 
+/** `/api/health` 里的 recent_problems：只保留自己需要的字段 */
+export interface ProbeProblem {
+  ts: string;
+  level: string;
+  scope: string;
+  msg: string;
+  /** 具体原因在 extra 里（ingest 写的是 extra.error / extra.reason） */
+  extra?: Record<string, unknown>;
+}
+
 export interface ProbeView {
   probe: ProbeStatusRow | null;
   /** 到看板服务的 SSE 连接状态（三态，页面刚加载时是 connecting） */
@@ -13,6 +23,8 @@ export interface ProbeView {
   /** 探针是否在最近 15 秒内推过数据 */
   live: boolean;
   subscribers: number;
+  /** 服务端最近的 warn / error（例如批次被拒的原因） */
+  problems: ProbeProblem[];
 }
 
 const STALE_MS = 15000;
@@ -20,6 +32,7 @@ const STALE_MS = 15000;
 export function useProbeStatus(): ProbeView {
   const [probe, setProbe] = useState<ProbeStatusRow | null>(null);
   const [subscribers, setSubscribers] = useState(0);
+  const [problems, setProblems] = useState<ProbeProblem[]>([]);
   const stream = useStreamStatus();
   const now = useNow(1000);
 
@@ -27,10 +40,11 @@ export function useProbeStatus(): ProbeView {
     let cancelled = false;
     fetch("/api/health")
       .then((response) => response.json())
-      .then((json: { probe?: ProbeStatusRow | null; subscribers?: number }) => {
+      .then((json: { probe?: ProbeStatusRow | null; subscribers?: number; recent_problems?: ProbeProblem[] }) => {
         if (cancelled) return;
         setProbe(json.probe ?? null);
         setSubscribers(json.subscribers ?? 0);
+        setProblems(json.recent_problems ?? []);
       })
       .catch(() => {
         // 服务暂不可达时保持空状态
@@ -53,5 +67,5 @@ export function useProbeStatus(): ProbeView {
 
   const live = probe?.last_seen_at ? now - Date.parse(probe.last_seen_at) < STALE_MS : false;
 
-  return { probe, stream, live, subscribers };
+  return { probe, stream, live, subscribers, problems };
 }

@@ -103,10 +103,11 @@ pi-observer/
     index.ts                    探针入口（Pi 直接加载，不参与 Next 构建）
     request.ts                  请求 payload 脱敏/截断、request_seq 与串行配对（纯逻辑）
     session-cursor.ts           request_seq / run_seq 的跨进程游标（data/session-cursor/）
+    logger.ts                   探针日志落点：默认只写 data/probe.log，不打用户终端
   tools/acceptance/             验收脚本（档 A 离线 + 档 B 真实 Pi）
   test/                         node --test 用例
   public/                       静态资源
-  data/                         observer.db · token · session-cursor/（已在 .gitignore）
+  data/                         observer.db · token · probe.log · session-cursor/（已在 .gitignore）
   next.config.ts                含 agentRules: false（不让 Next 生成 AGENTS.md）
   tsconfig.json / package.json
 ```
@@ -167,6 +168,7 @@ pi-observer/
 - 但探针里仍**建议不用 `enum` / `namespace`**，因为探针的纯逻辑（队列、合并、脱敏、请求序号）最容易也最值得用 `node --test` 直接测，而 Node 直跑时 strip-only 限制是真实存在的。
 - 请求 payload 在探针侧先脱敏、再按单条上限截断；服务端收到后再脱敏一次（防御纵深），不假设客户端一定做对。
 - `request_seq` / `run_seq` 写 `data/session-cursor/<会话哈希>.json`，只为跨 Pi 进程续跑时不覆盖旧请求与旧运行；不写 Pi 的会话文件。本地游标缺失时从看板的 `/api/sessions/:id/cursor` 取最大序号种子化。
+- 探针日志写 `data/probe.log`（默认不打 stderr）：探针在用户的 Pi 进程里，打到 stderr 会污染他们自己项目的终端。
 - 探针不进入 Next 的构建范围，`ext/` 不是 `src/` 下的内容。
 
 ---

@@ -32,12 +32,21 @@ export function backoffDelay(attempt: number): number {
 }
 
 export type PostOutcome =
-  | { ok: true; applied: Record<string, number> }
-  | { ok: false; retryable: boolean; reason: string };
+  | { ok: true; applied: Record<string, number>; status: number }
+  | { ok: false; retryable: boolean; reason: string; status: number | null };
 
-/** 4xx 说明这条批量本身有问题（令牌错、形状错、超限），重发只会一直失败 → 丢批并计数 */
+/**
+ * 哪些状态可以重试：
+ *   - 5xx / 408 / 429：服务端或网络暂时不行，退避后再发；
+ *   - 401：令牌不对。服务端重新生成 `data/token` 时探针缓存的旧值会让每一批都失败，
+ *     丢数据毫无意义，改为让调用方清掉缓存重读文件再试（见 flush 的 onUnauthorized）；
+ *   - 404 / 405：路由不存在或方法不匹配（例如探针指向了别的服务、或dev 正在重编译该路由）。
+ *     同样先重试，否则配置错误会静默丢数据；退避上限 15s，不会刷屏。
+ *
+ * 不可重试的只有 400（形状 / 协议不对，重发还是错）与 413（这批就是太大）。
+ */
 function isRetryable(status: number): boolean {
-  return status >= 500 || status === 408 || status === 429;
+  return status >= 500 || status === 401 || status === 404 || status === 405 || status === 408 || status === 429;
 }
 
 export async function postBatch(options: {
@@ -54,7 +63,7 @@ export async function postBatch(options: {
   try {
     body = JSON.stringify(options.batch);
   } catch (error) {
-    return { ok: false, retryable: false, reason: `序列化失败：${(error as Error).message}` };
+    return { ok: false, retryable: false, reason: `序列化失败：${(error as Error).message}`, status: null };
   }
 
   try {
@@ -78,17 +87,18 @@ export async function postBatch(options: {
       } catch {
         // 服务端返回体解析失败不算致命
       }
-      return { ok: true, applied };
+      return { ok: true, applied, status: response.status };
     }
 
     return {
       ok: false,
       retryable: isRetryable(response.status),
       reason: `HTTP ${response.status} ${text.slice(0, 200)}`,
+      status: response.status,
     };
   } catch (error) {
     // 网络错误 / 超时 / 服务未启动 → 可重试
-    return { ok: false, retryable: true, reason: (error as Error).message };
+    return { ok: false, retryable: true, reason: (error as Error).message, status: null };
   }
 }
 

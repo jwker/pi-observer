@@ -1,4 +1,5 @@
 import { dbStatus, getDb } from "@/lib/db.ts";
+import { recentProblems } from "@/lib/log.ts";
 import { subscriberCount } from "@/lib/sse.ts";
 import { probeStatus } from "@/lib/queries.ts";
 import { PROBE_PROTOCOL_VERSION, PROBE_VERSION } from "@/lib/protocol.ts";
@@ -18,5 +19,8 @@ export async function GET(): Promise<Response> {
     schema_user_version: status.userVersion,
     subscribers: subscriberCount(),
     probe: probeStatus(getDb()),
+    // 拒批、令牌错误这类 warn 只写 stderr，浏览器里看不到；这里带出去，
+    // 否则探针那边「已丢弃 N 条」和看板的 dropped_count=0 都无法解释（M3-6 修）
+    recent_problems: recentProblems(10),
   });
 }

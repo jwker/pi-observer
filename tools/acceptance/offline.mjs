@@ -298,6 +298,37 @@ try {
     return "protocol 2 → 400（整批拒绝，提示升级探针），库里没有留下半条";
   });
 
+  await checks.check("A6b", "拒批原因从 /api/health 读得到（页面能解释「已丢弃 N 条」）", async () => {
+    // 上面 A3/A5/A6 已经产生过 warn；这里确认它们不是只写 stderr
+    const health = await getJson(`${base}/api/health`);
+    assertEqual(health.status, 200, "health 状态码");
+    const problems = health.json.recent_problems;
+    assert(Array.isArray(problems), "health 应带 recent_problems 数组");
+    assert(problems.length >= 2, `至少应有 2 条 warn（令牌 / 超大批次 / 协议），实际 ${problems.length}`);
+
+    const messages = problems.map((entry) => `${entry.scope}:${entry.msg}`);
+    assert(
+      messages.some((m) => m.includes("令牌")),
+      `应有令牌相关 warn，实际：${messages.join(" | ")}`,
+    );
+    assert(
+      messages.some((m) => m.includes("过大") || m.includes("批次校验失败")),
+      `应有批次被拒相关 warn，实际：${messages.join(" | ")}`,
+    );
+    for (const entry of problems) {
+      assert(["warn", "error"].includes(entry.level), `只应包含 warn/error，实际 ${entry.level}`);
+      assert(typeof entry.ts === "string" && entry.ts !== "", "每条都带时间");
+    }
+    // 状态栏显示的是 msg + extra 里的原因，所以 extra 也必须带上来
+    const withReason = problems.filter((entry) =>
+      Object.values(entry.extra ?? {}).some((value) => typeof value === "string"),
+    );
+    assert(withReason.length > 0, "至少一条 warn 要带得上原因（extra）");
+    return `${problems.length} 条可见：${problems
+      .map((e) => `${e.msg}${Object.values(e.extra ?? {}).find((v) => typeof v === "string") ? `→${Object.values(e.extra ?? {}).find((v) => typeof v === "string")}` : ""}`)
+      .join(" / ")}`;
+  });
+
   await checks.check("A7", "合法批次入库：会话 / 事件 / Turn / 工具 / 请求都落库", async () => {
     const response = await postBatch(
       base,

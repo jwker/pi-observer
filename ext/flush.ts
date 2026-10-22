@@ -14,6 +14,25 @@ import {
 import { backoffDelay, postBatch } from "./client.ts";
 import type { BoundedQueue } from "./queue.ts";
 
+/**
+ * 毒批日志里的批次指纹：按顺序列出记录种类，并给出最大单条体积。
+ * 服务端的错误信息里带 `records[N].xxx`，对着这个顺序就能定位到具体哪条。
+ */
+function describeBatch(records: IngestRecord[]): string {
+  const kinds = records.map((record) => record.kind).join(",");
+  let maxBytes = 0;
+  for (const record of records) {
+    let bytes = 0;
+    try {
+      bytes = Buffer.byteLength(JSON.stringify(record) ?? "", "utf8");
+    } catch {
+      bytes = 0;
+    }
+    if (bytes > maxBytes) maxBytes = bytes;
+  }
+  return `[${kinds}] 最大单条 ${(maxBytes / 1024).toFixed(1)} KB`;
+}
+
 export interface FlushDeps {
   queue: BoundedQueue<IngestRecord>;
   ingestUrl: string;
@@ -21,6 +40,8 @@ export interface FlushDeps {
   token: () => string | null;
   /** 被服务端拒绝（毒批）而丢弃的条数 */
   rejectedCount: () => number;
+  /** 服务端回了 401：清掉内存里缓存的令牌，下次重试重新读令牌文件 */
+  onUnauthorized?: () => void;
   maxBatchRecords: number;
   maxBatchBytes: number;
   log: (message: string) => void;
@@ -94,12 +115,20 @@ export function createFlusher(deps: FlushDeps): Flusher {
         const wait = backoffDelay(attempt);
         attempt += 1;
         nextAttemptAt = now() + wait;
-        deps.log(`推送失败，${wait}ms 后重试：${outcome.reason}`);
+        if (outcome.status === 401) {
+          // 令牌可能已被服务端重新生成（或探针指向了别的实例）：丢掉缓存的旧值，
+          // 下一批重读令牌文件。仍然走退避档位，否则令牌真的不对时会每 300 ms 空转一次。
+          deps.onUnauthorized?.();
+          deps.log(`令牌校验失败，已清除缓存令牌，${wait}ms 后用重读的令牌重试：${outcome.reason}`);
+        } else {
+          deps.log(`推送失败，${wait}ms 后重试：${outcome.reason}`);
+        }
         return false;
       }
 
-      // 毒批（形状错、超限、令牌不对）：重发不会成功，丢掉并计数
-      deps.log(`批次被拒绝，已丢弃 ${records.length} 条：${outcome.reason}`);
+      // 毒批（形状错、协议不匹配、这批太大）：重发不会成功，丢掉并计数。
+      // 日志里带上记录种类与最大体积，否则只能看到「丢了 N 条」而不知道是哪条的问题。
+      deps.log(`批次被拒绝，已丢弃 ${records.length} 条：${describeBatch(records)} ${outcome.reason}`);
       return true;
     } finally {
       flushing = false;

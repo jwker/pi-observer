@@ -30,6 +30,7 @@ import { createFlusher, type Flusher } from "./flush.ts";
 import { capValue } from "./limit.ts";
 import { assistantLike } from "./assistant.ts";
 import { BoundedQueue } from "./queue.ts";
+import { createProbeLogger, probeLogDir, type ProbeLogger } from "./logger.ts";
 import { RequestTracker } from "./request.ts";
 import { sessionCursorStore } from "./session-cursor.ts";
 
@@ -63,6 +64,22 @@ interface ProbeState {
 
 let state: ProbeState | null = null;
 
+/**
+ * 探针日志默认只写文件（`data/probe.log`），不打进用户的 Pi 终端——
+ * 否则用户在自己项目里会突然看到与本项目无关的消息。
+ * 需要时用 `PI_OBSERVER_DEBUG=1` 让它同时打到 stderr。
+ */
+let logger: ProbeLogger = {
+  log: (message: string) => {
+    try {
+      console.error(`[pi-observer] ${message}`);
+    } catch {
+      // 连日志都失败就算了
+    }
+  },
+  file: () => null,
+};
+
 const nowIso = (): string => new Date().toISOString();
 
 function jsonSize(value: unknown): number {
@@ -85,11 +102,7 @@ function safe(label: string, fn: () => void): void {
   try {
     fn();
   } catch (error) {
-    try {
-      console.error(`[pi-observer] ${label} 处理失败：${(error as Error).message}`);
-    } catch {
-      // 连日志都失败就算了
-    }
+    logger.log(`${label} 处理失败：${(error as Error).message}`);
   }
 }
 
@@ -98,11 +111,7 @@ async function safeAsync(label: string, fn: () => Promise<void>): Promise<void> 
   try {
     await fn();
   } catch (error) {
-    try {
-      console.error(`[pi-observer] ${label} 处理失败：${(error as Error).message}`);
-    } catch {
-      // 同上
-    }
+    logger.log(`${label} 处理失败：${(error as Error).message}`);
   }
 }
 
@@ -250,11 +259,16 @@ export default function probe(pi: ExtensionAPI): void {
     safeAsync("session_start", async () => {
       const session = sessionInfo(ctx);
       if (!session) {
-        console.error("[pi-observer] 拿不到会话信息，本会话不采集");
+        logger.log("拿不到会话信息，本会话不采集");
         return;
       }
 
       const config = loadProbeConfig();
+      // 日志落点与令牌同目录（默认 <repo>/data/probe.log）；默认不打终端
+      logger = createProbeLogger({
+        dir: probeLogDir(config.tokenFile),
+        toStderr: config.debug,
+      });
       const queue = new BoundedQueue<IngestRecord>(jsonSize, {
         maxRecords: config.maxQueueRecords,
         maxBytes: config.maxQueueBytes,
@@ -272,7 +286,7 @@ export default function probe(pi: ExtensionAPI): void {
           // 只提醒一次：写不了游标时序号仍可用，但重开同一会话可能撞号
           if (!cursorWarned) {
             cursorWarned = true;
-            console.error(`[pi-observer] 会话游标写入失败（${(error as Error).message}）；续跑同一会话时可能覆盖旧运行/请求`);
+            logger.log(`会话游标写入失败（${(error as Error).message}）；续跑同一会话时可能覆盖旧运行/请求`);
           }
         }
       };
@@ -300,7 +314,7 @@ export default function probe(pi: ExtensionAPI): void {
           cursor.requestSeq = seq;
           persistCursor();
         },
-        log: config.debugRequests ? (message) => console.error(`[pi-observer] ${message}`) : undefined,
+        log: config.debugRequests ? (message) => logger.log(message) : undefined,
       });
 
       const nextState: ProbeState = {
@@ -312,9 +326,14 @@ export default function probe(pi: ExtensionAPI): void {
           ingestUrl: config.ingestUrl,
           token: () => readToken(nextState),
           rejectedCount: () => nextState.rejectedByServer,
+          // 服务端回了 401 说明缓存的令牌不再有效（重新生成过、指向了别的实例）。
+          // 丢掉缓存让下一次重试重读文件，否则探针会每批都被拒、且自己永远不会恢复。
+          onUnauthorized: () => {
+            nextState.token = null;
+          },
           maxBatchRecords: config.maxBatchRecords,
           maxBatchBytes: config.maxBatchBytes,
-          log: (message) => console.error(`[pi-observer] ${message}`),
+          log: (message) => logger.log(message),
         }),
         requests,
         persistRunSeq: (seq) => {
@@ -396,7 +415,9 @@ export default function probe(pi: ExtensionAPI): void {
 
   pi.on("agent_start", () =>
     safe("agent_start", () => {
-      if (!state) return;
+      // 与 pushEvent / pushSession 一致地先判session：否则会发出 session_id 为空的 run 记录，
+      // 而空 session_id 会让整批被服务端拒（一条坏记录毒掉整批）
+      if (!state?.session) return;
       state.runSeq += 1;
       state.persistRunSeq(state.runSeq);
       state.runStartedAt = nowIso();
@@ -404,7 +425,7 @@ export default function probe(pi: ExtensionAPI): void {
       pushEvent(state, "agent", "agent_start", { runSeq: state.runSeq });
       emit(state, {
         kind: "run",
-        session_id: state.session?.sessionId ?? "",
+        session_id: state.session.sessionId,
         run_seq: state.runSeq,
         started_at: state.runStartedAt,
         ended_at: null,
@@ -426,12 +447,12 @@ export default function probe(pi: ExtensionAPI): void {
 
   pi.on("agent_settled", (event) =>
     safe("agent_settled", () => {
-      if (!state) return;
+      if (!state?.session) return;
       const endedAt = nowIso();
       pushEvent(state, "agent", "agent_settled", { runSeq: state.runSeq, aborted: event.aborted });
       emit(state, {
         kind: "run",
-        session_id: state.session?.sessionId ?? "",
+        session_id: state.session.sessionId,
         run_seq: state.runSeq,
         started_at: state.runStartedAt,
         ended_at: endedAt,
@@ -624,22 +645,14 @@ export default function probe(pi: ExtensionAPI): void {
       // 尽力把积压发完，最多等 3 秒；超时就放弃（不能拖住 Pi 退出）
       await flushWithin(s, 3000);
     } catch (error) {
-      try {
-        console.error(`[pi-observer] 退出收尾失败：${(error as Error).message}`);
-      } catch {
-        // 忽略
-      }
+      logger.log(`退出收尾失败：${(error as Error).message}`);
     } finally {
       stopTimers(s);
       // 收尾后仍有剩的，说明服务端一直不可达。丢掉但必须说出来，不能假装没发生。
       if (s.queue.depth > 0) {
-        try {
-          console.error(
-            `[pi-observer] 退出时仍有 ${s.queue.depth} 条未送达（服务端不可达？），本次会话丢弃 ${s.queue.droppedCount + s.rejectedByServer + s.queue.depth} 条`,
-          );
-        } catch {
-          // 忽略
-        }
+        logger.log(
+          `退出时仍有 ${s.queue.depth} 条未送达（服务端不可达？），本次会话丢弃 ${s.queue.droppedCount + s.rejectedByServer + s.queue.depth} 条`,
+        );
       }
       s.queue.clear();
       state = null;

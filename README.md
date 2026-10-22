@@ -99,7 +99,7 @@ tools/              截图与验收脚本
 test/               单元测试
 docs/               PRD、技术选型、可行性验证
 prototype/          设计基准（静态稿）
-data/               运行数据：observer.db、token、探针游标（不进 git）
+data/               运行数据：observer.db、token、probe.log、探针游标（不进 git）
 ```
 
 ## 配置
@@ -125,7 +125,12 @@ data/               运行数据：observer.db、token、探针游标（不进 g
 | `PI_OBSERVER_BATCH_SIZE` | `50` | 队列到多少条立即发送 |
 | `PI_OBSERVER_BATCH_INTERVAL_MS` | `300` | 定时发送间隔 |
 | `PI_OBSERVER_MAX_QUEUE_RECORDS` | `2000` | 队列条数上限 |
-| `PI_OBSERVER_DEBUG_REQUESTS` | 关闭 | 每次模型请求往终端打一行采集摘要 |
+| `PI_OBSERVER_DEBUG_REQUESTS` | 关闭 | 每次模型请求往日志写一行采集摘要 |
+| `PI_OBSERVER_DEBUG` | 关闭 | 同时把探针日志打到 stderr |
+
+探针日志默认只写 `data/probe.log`，**不进你的终端**：探针跑在 Pi 进程里，
+打到 stderr 会在你打开的每个项目里冒出一条与本项目无关的消息。
+用 `tail -f data/probe.log` 看；排查时才临时设 `PI_OBSERVER_DEBUG=1`。
 
 ## API
 
