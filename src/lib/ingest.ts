@@ -501,6 +501,22 @@ export function applyBatch(batch: IngestBatch, db: Db, payloadRoot: string = pay
       }
     }
 
+    /**
+     * 兜底建会话行。
+     *
+     * 探针只在 `session_start`（以及会话名变化时）发一次 session 记录。如果这批被错过了
+     * —— 看板刚被清空、探针是旧进程、服务端重启时丢了一批——会话就会“有事件但没有会话”，
+     * 侧边栏整个空掉。
+     *
+     * 所以只要有记录带着 session_id，就先确保会话行存在。
+     * 用 INSERT OR IGNORE：已存在的行一律不碰（cwd、来源、状态都归回填与探针自己管）。
+     */
+    const ensureSession = db.prepare(`
+      INSERT OR IGNORE INTO sessions (session_id, cwd, state, source, last_activity_at)
+      VALUES (?, '', 'active', 'live', ?)
+    `);
+    for (const sessionId of touched) ensureSession.run(sessionId, now);
+
     // 会话聚合与活跃时间：按受影响会话重算，避免增量计数漂移。
     for (const sessionId of touched) refreshSessionAggregates(db, sessionId);
 

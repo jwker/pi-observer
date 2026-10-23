@@ -492,6 +492,52 @@ test("协议 v3 不再接受：正文必须走文件", () => {
   if (!result.ok) assert.match(result.error, /协议版本不匹配/);
 });
 
+test("兜底建会话行：只有事件没有 session 记录时，会话也会出现", () => {
+  const { db, cleanup } = tempDb();
+  try {
+    const parsed = parseBatch({
+      protocol: PROBE_PROTOCOL_VERSION,
+      probe_version: "0.4.0",
+      records: [
+        {
+          kind: "event",
+          event_id: "ev_orphan",
+          session_id: "s-orphan",
+          layer: "agent",
+          event_type: "agent_start",
+          payload_path: null,
+        },
+      ],
+    });
+    assert.equal(parsed.ok, true);
+    if (!parsed.ok) return;
+
+    applyBatch(parsed.batch, db);
+
+    const session = db.prepare("SELECT session_id, cwd, source FROM sessions WHERE session_id = 's-orphan'").get() as {
+      session_id: string;
+      cwd: string;
+      source: string;
+    };
+    assert.ok(session, "有事件就该有会话行，否则侧边栏会整个空掉");
+    assert.equal(session.cwd, "", "cwd 未知时不编造");
+    assert.equal(session.source, "live", "来源如实标成 live");
+
+    // 已存在的会话行不被覆盖
+    db.prepare("UPDATE sessions SET cwd = '/tmp/x', source = 'merged' WHERE session_id = 's-orphan'").run();
+    applyBatch(parsed.batch, db);
+    const after = db.prepare("SELECT cwd, source FROM sessions WHERE session_id = 's-orphan'").get() as {
+      cwd: string;
+      source: string;
+    };
+    assert.equal(after.cwd, "/tmp/x", "已有会话行不被兜底逻辑覆盖");
+    assert.equal(after.source, "merged");
+  } finally {
+    db.close();
+    cleanup();
+  }
+});
+
 test("协议版本不对的整批仍然被拒", () => {
   const result = parseBatch({ protocol: 2, records: [{ kind: "session" }] });
   assert.equal(result.ok, false);
