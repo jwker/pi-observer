@@ -1,3 +1,4 @@
+import { ProbePanel } from "@/components/probe-panel.tsx";
 import { StoragePanel } from "@/components/storage-panel.tsx";
 
 export const dynamic = "force-dynamic";
@@ -20,6 +21,7 @@ export default function SettingsPage() {
         </div>
       </div>
 
+      <ProbePanel />
       <StoragePanel />
     </div>
   );
