@@ -5,7 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { prepareRequestValue, RequestTracker } from "../ext/request.ts";
+import { RequestTracker, serializePayload } from "../ext/request.ts";
+import { createPayloadStore } from "../ext/payload-store.ts";
 import { sessionCursorStore } from "../ext/session-cursor.ts";
 
 const NOW = "2026-10-19T10:00:00.000Z";
@@ -18,48 +19,39 @@ const meta = {
   turnIndex: 5,
 };
 
-test("请求 payload：先脱敏，payload_bytes 记脱敏前的原始字节数", () => {
-  const payload = {
-    model: "deepseek-flash",
-    authorization: "Bearer sk-abcdefghijklmnopqrstuvwxyz",
-    headers: { "x-api-key": "plain-secret" },
-    messages: [{ role: "user", content: "你好" }],
-  };
+test("请求 payload：写进文件，批次里只带路径与字节数", () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-observer-payload-"));
+  try {
+    const store = createPayloadStore({ root });
+    const payload = {
+      model: "deepseek-flash",
+      messages: [{ role: "user", content: "你好" }],
+    };
+    const tracker = new RequestTracker({ sessionId: "s1", store, now });
+    const record = tracker.start(payload, meta);
 
-  const prepared = prepareRequestValue(payload, 512 * 1024);
-  assert.equal(prepared.originalBytes, Buffer.byteLength(JSON.stringify(payload), "utf8"));
-  assert.equal(prepared.truncated, false);
-  assert.deepEqual(prepared.removed.sort(), ["authorization", "headers.x-api-key"]);
+    assert.equal(record.payload_path, "request/s1/1.json");
+    assert.equal(record.payload_bytes, Buffer.byteLength(JSON.stringify(payload), "utf8"));
 
-  const value = prepared.value as Record<string, unknown>;
-  assert.equal(value.authorization, "[redacted]");
-  assert.equal((value.headers as Record<string, unknown>)["x-api-key"], "[redacted]");
-  assert.deepEqual((value.messages as unknown[]).length, 1);
+    const written = JSON.parse(readFileSync(join(root, "request", "s1", "1.json"), "utf8"));
+    assert.equal(written.model, "deepseek-flash", "文件里是完整正文");
+    assert.equal(written.messages.length, 1);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
-test("请求 payload：超限时给合法 JSON 标记，预览不切坏多字节字符", () => {
-  const payload = { model: "m", messages: [{ role: "user", content: "中文".repeat(100_000) }] };
-  const prepared = prepareRequestValue(payload, 1000);
-
-  assert.equal(prepared.truncated, true);
-  assert.ok(prepared.originalBytes > 1000);
-  assert.ok(prepared.storedBytes > 1000);
-
-  const marker = prepared.value as { truncated?: unknown; bytes?: unknown; original_bytes?: unknown; head?: unknown };
-  assert.equal(marker.truncated, true);
-  assert.equal(marker.bytes, prepared.storedBytes);
-  assert.equal(marker.original_bytes, prepared.originalBytes);
-  assert.equal(typeof marker.head, "string");
-  assert.ok((marker.head as string).includes("已截断"));
-  assert.ok(!(marker.head as string).includes("\uFFFD"), "不能出现替换字符");
-  assert.doesNotThrow(() => JSON.parse(JSON.stringify(prepared.value)));
+test("请求 payload 不可序列化时不让 handler 抛错", () => {
+  const circular: Record<string, unknown> = {};
+  circular.self = circular;
+  const text = serializePayload(circular);
+  assert.deepEqual(JSON.parse(text), { unserializable: true });
 });
 
 test("请求序号：每次请求自增，重试是一条新记录而不是覆盖", () => {
   const saved: number[] = [];
   const tracker = new RequestTracker({
     sessionId: "s1",
-    maxBytes: 512 * 1024,
     initialSeq: 4,
     persistSeq: (seq) => saved.push(seq),
     now,
@@ -72,7 +64,8 @@ test("请求序号：每次请求自增，重试是一条新记录而不是覆�
   assert.equal(first.model, "deepseek-flash");
   assert.equal(first.run_seq, 2, "请求关联到发起它的运行");
   assert.equal(first.turn_index, 5, "请求关联到发起它的 Turn");
-  assert.equal(first.payload_bytes, Buffer.byteLength(JSON.stringify({ model: "m" }), "utf8"));
+  assert.equal(first.payload_path, null, "没有 store 时没有正文文件");
+  assert.equal(first.payload_bytes, null);
   assert.equal(first.status, null);
   assert.deepEqual(saved, [5]);
 
@@ -89,7 +82,7 @@ test("请求序号：每次请求自增，重试是一条新记录而不是覆�
 });
 
 test("请求与响应：串行配对；新的请求会放弃未响应的旧请求", () => {
-  const tracker = new RequestTracker({ sessionId: "s1", maxBytes: 512 * 1024, now });
+  const tracker = new RequestTracker({ sessionId: "s1", now });
 
   const first = tracker.start({ n: 1 }, meta);
   assert.equal(tracker.pendingCount(), 1);
@@ -101,24 +94,15 @@ test("请求与响应：串行配对；新的请求会放弃未响应的旧请�
   const response = tracker.response(200, { authorization: "secret-value", "x-ds-trace-id": "trace-1" });
   assert.equal(response?.request_seq, second.request_seq);
   assert.notEqual(response?.request_seq, first.request_seq);
-  assert.equal(response?.payload, null);
+  assert.equal(response?.payload_path, null);
   assert.equal(response?.payload_bytes, null);
-  assert.equal(response?.payload_truncated, null);
   assert.equal(response?.correlation, "serial_assumed");
   const headers = response?.response_headers as Record<string, unknown>;
-  assert.equal(headers.authorization, "[redacted]");
+  assert.equal(headers.authorization, "secret-value", "不再脱敏");
   assert.equal(headers["x-ds-trace-id"], "trace-1");
 
   assert.equal(tracker.response(500, {}), null, "多出来的响应不凭空造记录");
   assert.equal(tracker.pendingCount(), 0);
-});
-
-test("请求 payload 不可序列化时不让 handler 抛错", () => {
-  const circular: Record<string, unknown> = {};
-  circular.self = circular;
-  const prepared = prepareRequestValue(circular, 1024);
-  assert.equal(prepared.truncated, true);
-  assert.deepEqual(prepared.value, { unserializable: true, original_bytes: 0 });
 });
 
 test("会话游标：request_seq 与 run_seq 跨实例继续，文件权限 0600", () => {

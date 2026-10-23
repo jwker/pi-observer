@@ -63,6 +63,15 @@ export function migrate(db: Db): void {
     ensureColumn(db, "turns", "cache_write", "INTEGER");
     ensureColumn(db, "tool_calls", "entry_id", "TEXT");
     ensureColumn(db, "tool_calls", "result_entry_id", "TEXT");
+    // v6：正文进文件。库里只留路径与骨架。
+    // 注意：v5 的库里的 `messages.payload` / `events.payload` / `llm_requests.payload` 列
+    // **不删**（SQLite 删列要重写表），但新代码不再读它们 → 升级前的历史正文在界面上看不到，
+    // 而且文件里没有、JSONL 里也没有（请求体），无法恢复。数据量大时直接重建库更省事。
+    ensureColumn(db, "llm_requests", "payload_path", "TEXT");
+    ensureColumn(db, "events", "payload_path", "TEXT");
+    ensureColumn(db, "events", "payload_summary", "TEXT");
+    ensureColumn(db, "messages", "payload_path", "TEXT");
+    ensureColumn(db, "messages", "payload_summary", "TEXT");
     // 索引必须在补列之后建：旧库的 tool_calls 还没有 entry_id。
     db.exec("CREATE INDEX IF NOT EXISTS idx_tools_entry ON tool_calls(session_id, entry_id)");
     db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);

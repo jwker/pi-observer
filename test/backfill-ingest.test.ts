@@ -4,7 +4,7 @@
  * 全部用合成会话文件 + 临时看板库，不读真实 `~/.pi/agent/sessions`。
  */
 import assert from "node:assert/strict";
-import { appendFileSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -107,6 +107,8 @@ function fixture(options: { lines?: string[]; sessionId?: string; mtime?: number
   const ctx = createBackfillContext({
     db,
     sessionsDir: root,
+    // 正文写到临时目录，不碰仓库里的 data/
+    payloadRoot: join(dir, "payloads"),
     now: () => "2026-10-19T09:00:00.000Z",
   });
   return {
@@ -183,9 +185,12 @@ test("backfillFile：会话 / 条目 / turn / 工具调用全部落库，字段�
     assert.equal(texts.t1, "文件内容");
     assert.equal(texts.m1, "模型 → deepseek-v4-pro");
 
-    // payload 是原始条目 JSON（未截断时逐字节等价）
-    const payload = row(f.db, "SELECT payload FROM messages WHERE session_id = 's1' AND entry_id = 'a1'");
-    assert.deepEqual(JSON.parse(payload.payload as string), JSON.parse(sessionLines()[3]));
+    // 正文写进文件，库里只留路径与骨架
+    const stored = row(f.db, "SELECT payload_path, payload_summary FROM messages WHERE session_id = 's1' AND entry_id = 'a1'");
+    assert.equal(stored.payload_path, "message/s1/a1.json");
+    const written = JSON.parse(readFileSync(join(f.ctx.payloadRoot, "message", "s1", "a1.json"), "utf8"));
+    assert.deepEqual(written, JSON.parse(sessionLines()[3]), "文件里是完整条目");
+    assert.equal(JSON.parse(stored.payload_summary as string).message.role, "assistant", "骨架保留结构");
 
     // turn：持久键是助手条目 id；run_seq 是回填的占位值 1
     const turns = rows(f.db, "SELECT * FROM turns WHERE session_id = 's1' ORDER BY turn_index");
@@ -401,6 +406,7 @@ test("backfillFile：实时先写过 turn 时，回填落同一行且不动 run_
         probe_version: "0.3.0",
         dropped_count: 0,
         queue_depth: 0,
+        payload_root: null,
         records: [
           {
             kind: "session",
@@ -569,10 +575,9 @@ test("createJournalReader：重写时默认按 id 去重，emitAll 让全部条�
   }
 });
 
-test("messages.payload 超过上限时截断并打标（不写半截 JSON）", () => {
+test("正文不再截断：文件里是完整条目", () => {
   const f = fixture();
   try {
-    const ctx = createBackfillContext({ ...f.ctx, payloadMaxBytes: 200 });
     writeFileSync(
       f.path,
       [
@@ -581,12 +586,14 @@ test("messages.payload 超过上限时截断并打标（不写半截 JSON）", (
       ].join(""),
       "utf8",
     );
-    backfillFile(f.path, ctx);
+    backfillFile(f.path, f.ctx);
 
-    const stored = row(f.db, "SELECT payload FROM messages WHERE session_id = 's1' AND entry_id = 'u1'");
-    const parsed = JSON.parse(stored.payload as string) as { truncated?: boolean; bytes?: number };
-    assert.equal(parsed.truncated, true);
-    assert.ok((parsed.bytes ?? 0) > 200);
+    const stored = row(f.db, "SELECT payload_path FROM messages WHERE session_id = 's1' AND entry_id = 'u1'");
+    assert.equal(stored.payload_path, "message/s1/u1.json");
+    const written = JSON.parse(readFileSync(join(f.ctx.payloadRoot, "message", "s1", "u1.json"), "utf8")) as {
+      message: { content: string };
+    };
+    assert.equal(written.message.content.length, 2000, "正文不截断");
   } finally {
     f.cleanup();
   }

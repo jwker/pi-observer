@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { clockTime, dateTime, formatBytes, formatDuration, formatTokens, shortId } from "@/lib/format.ts";
 import type { StreamRow } from "@/lib/stream.ts";
+import { RequestDiff } from "./request-diff.tsx";
 import type {
   EventRow,
   MessageDetail,
@@ -22,7 +23,7 @@ interface RowDetailModalProps {
   onClose: () => void;
 }
 
-type Tab = "content" | "raw" | "related";
+type Tab = "content" | "raw" | "diff" | "related";
 
 /**
  * 每行「详情」弹窗（R3）。
@@ -124,6 +125,11 @@ export function RowDetailModal({ target, onClose }: RowDetailModalProps) {
             <button className={tab === "raw" ? "on" : ""} onClick={() => setTab("raw")}>
               原始 JSON
             </button>
+            {detail?.request !== null && detail?.request !== undefined ? (
+              <button className={tab === "diff" ? "on" : ""} onClick={() => setTab("diff")}>
+                对比上一条
+              </button>
+            ) : null}
             <button className={tab === "related" ? "on" : ""} onClick={() => setTab("related")}>
               关联{relatedCount > 0 ? ` · ${relatedCount}` : ""}
             </button>
@@ -136,6 +142,9 @@ export function RowDetailModal({ target, onClose }: RowDetailModalProps) {
             <>
               {tab === "content" ? <ContentPanel row={row} detail={detail} /> : null}
               {tab === "raw" ? <RawPanel row={row} detail={detail} /> : null}
+              {tab === "diff" && detail.request !== null ? (
+                <RequestDiff sessionId={sessionId} requestSeq={detail.request.request_seq} />
+              ) : null}
               {tab === "related" ? <RelatedPanel detail={detail} /> : null}
             </>
           ) : null}
@@ -172,7 +181,7 @@ function DetailMeta({ row, detail }: { row: StreamRow; detail: RowDetailData | n
     items.push(["provider", detail.request.provider ?? "—"]);
     items.push(["api", detail.request.api ?? "—"]);
     items.push(["model", detail.request.model ?? "—"]);
-    items.push(["payload", `${formatBytes(detail.request.payload_bytes)}${detail.request.payload_truncated === 1 ? "（已截断）" : ""}`]);
+    items.push(["payload", `${formatBytes(detail.request.payload_bytes)}（正文在文件里）`]);
     items.push(["响应", detail.request.status === null ? "未到达" : String(detail.request.status)]);
     items.push(["时间", dateTime(detail.request.created_at)]);
   } else if (detail?.event !== null && detail?.event !== undefined) {
@@ -522,7 +531,7 @@ function footNote(row: StreamRow): string {
     return "来自会话文件。正文、思考与工具参数都从这里取；存储去重后这是唯一一份。";
   }
   if (row.kind === "request" || row.kind === "response") {
-    return "请求与响应来自钩子；payload 已脱敏，超过上限时截断。payload 只保留在看板库里，不改动 Pi 的文件。";
+    return "请求与响应来自钩子；请求体原样存在看板的数据目录里（不脱敏、不截断、也不自动清理），不改动 Pi 的文件。";
   }
   return "钩子事件只补文件里没有的信息：运行状态、工具起止、请求与响应。";
 }

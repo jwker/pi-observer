@@ -49,6 +49,10 @@ export function TopBar() {
         <div className="brand">
           <span className="dot">●</span>pi-observer <span className="sub">只读</span>
         </div>
+        <nav className="nav">
+          <a href="/">看板</a>
+          <a href="/settings">设置</a>
+        </nav>
         <div className="spacer" />
         <ProbePill />
         <button

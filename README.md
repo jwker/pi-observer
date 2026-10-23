@@ -10,7 +10,8 @@ Pi 运行时数据的只读本地看板。
 - **单用户、单机**：服务固定监听回环地址，不提供账号体系，不做远程访问。
 - **不做会话管理**：不删除、不隐藏、不重命名 Pi 的会话。
 - **不推定**：取不到的字段在界面和数据里标「不可用」，不用默认值补齐。
-- **保留 7 天**：到期后 payload 清空为 `{"deleted":true}`、事件行删除；消息与请求的元信息（行号、父子关系、token、成本）保留，不设总量上限。
+- **正文存文件**：完整正文（模型请求体、钩子事件、会话条目）写进 `data/payloads/`，数据库只留元信息与相对路径。看板不再往库里堆正文，数据库体积可以忽略。
+- **不自动删数据**：没有保留期，到期也不清。容量由使用者自己控制：设置页能看到占用，变大了就自己导出或删除正文文件。
 - **令牌只保护写接口**：`/api/ingest` 与 `/api/backfill` 需要 `x-observer-token`；读接口不校验，因为服务只在回环地址上。
 
 ## 界面
@@ -22,6 +23,8 @@ Pi 运行时数据的只读本地看板。
 | 会话列表 | 按项目（cwd）分组，显示会话名（没有则首条用户消息）、运行状态、Turn 数与最近活动时间 |
 | 时间线 | Turn 默认折叠；默认最近 20 个，「加载更早」每次再加 20 个；倒序，打开停在顶部 |
 | 行详情 | 每行行首的 `more` 按钮打开弹窗：钩子入参、关联条目/请求/工具、原始 JSON；回填行进弹窗标「来自文件」 |
+| 请求对比 | 请求行的弹窗里多一个「对比上一条」页签：同一个会话里相邻两次请求的完整请求体逐行对比，增删行着色，没变的部分折叠 |
+| 设置 | 顶栏「设置」进设置页：数据库与正文文件分别占多少、各类记录多少条、占空间最多的会话 |
 | 顶部筛选 | 按组开关：消息 / 会话 / 运行 / 工具 / 模型 / 探针；默认全开，写入 `localStorage` |
 | 主题 | 亮色 / 暗色切换，亮色底色为中性灰 |
 | 实时 | 活跃会话每秒增量读文件；SSE 负责「有新数据」的通知，不传正文 |
@@ -84,7 +87,8 @@ curl -s http://127.0.0.1:4173/api/health
 约束：
 
 - 消息正文不经过探针，由服务端直接读文件，避免重复传输。
-- 请求 payload 先脱敏（`authorization`、`x-api-key` 等）再落库；单条超过 512 KB 截断并打标，同时记录脱敏前长度。
+- 正文不随批次传输：探针把请求体与事件正文写成文件，批次里只带相对路径与字节数。这样一条几 MB 的请求也不会把批次上限或内存队列撑爆。
+- 正文不截断、不脱敏：文件里是原样的请求体。数据库里另存一份「骨架」（结构保留、长字符串截短），时间线与工具列表直接读它。
 - 探针的所有 handler 返回 `undefined` 并包在 `try/catch` 里；服务不可用时只进有界队列，不阻塞 Pi。
 
 ## 目录结构
@@ -92,14 +96,14 @@ curl -s http://127.0.0.1:4173/api/health
 ```
 src/app/            页面与 API 路由（Next.js App Router，全部 nodejs 运行时）
 src/components/     单页外壳、会话列表、时间线、详情弹窗
-src/lib/            协议契约、入库、回填、对账、查询、保留期
+src/lib/            协议契约、入库、回填、对账、查询、正文文件、差异、存储统计
 ext/                Pi 探针（扩展）源码
 probes/             一次性测量脚本，不参与运行时
 tools/              截图与验收脚本
 test/               单元测试
 docs/               PRD、技术选型、可行性验证
 prototype/          设计基准（静态稿）
-data/               运行数据：observer.db、token、probe.log、探针游标（不进 git）
+data/               运行数据：observer.db、token、probe.log、探针游标、payloads/ 正文文件（不进 git）
 ```
 
 ## 配置
@@ -111,9 +115,7 @@ data/               运行数据：observer.db、token、probe.log、探针游�
 | `PORT` | `4173` | 监听端口，地址固定 `127.0.0.1` |
 | `PI_OBSERVER_DATA_DIR` | `./data` | 库与令牌所在目录 |
 | `PI_OBSERVER_SESSIONS_DIR` | `~/.pi/agent/sessions` | Pi 会话文件根目录 |
-| `PI_OBSERVER_RETENTION_DAYS` | `7` | payload 与事件保留天数 |
 | `PI_OBSERVER_INGEST_MAX_BYTES` | `2097152` | 单批请求体上限 |
-| `PI_OBSERVER_PAYLOAD_MAX_BYTES` | `524288` | 单条 payload 上限 |
 | `PI_OBSERVER_RECONCILE_DELAY_MS` | `3000` | `agent_settled` 后多久对账 |
 
 探针：
@@ -122,6 +124,7 @@ data/               运行数据：observer.db、token、probe.log、探针游�
 |:--|:--|:--|
 | `PI_OBSERVER_URL` | `http://127.0.0.1:4173` | 看板地址 |
 | `PI_OBSERVER_TOKEN_FILE` | `<仓库>/data/token` | 令牌路径（按探针文件位置解析，不依赖 Pi 的 cwd） |
+| `PI_OBSERVER_PAYLOAD_DIR` | `<仓库>/data/payloads` | 正文文件根目录 |
 | `PI_OBSERVER_BATCH_SIZE` | `50` | 队列到多少条立即发送 |
 | `PI_OBSERVER_BATCH_INTERVAL_MS` | `300` | 定时发送间隔 |
 | `PI_OBSERVER_MAX_QUEUE_RECORDS` | `2000` | 队列条数上限 |

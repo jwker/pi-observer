@@ -15,7 +15,7 @@ function makeEvent(id: string): IngestRecord {
     session_id: "s1",
     layer: "agent",
     event_type: "agent_start",
-    payload: { id },
+    payload_path: `event/e/${id}.json`,
     occurred_at: "2026-10-19T10:00:00.000Z",
     run_seq: 1,
     turn_index: 0,
@@ -57,6 +57,7 @@ function harness(options: {
     onUnauthorized: options.onUnauthorized,
     maxBatchRecords: options.maxBatchRecords ?? 200,
     maxBatchBytes: options.maxBatchBytes ?? 1024 * 1024,
+    payloadRoot: () => "/tmp/payloads",
     log: (message) => logs.push(message),
     now: () => readNow(),
     post: async (input) => {
@@ -250,6 +251,7 @@ test("协议号随批次上报，且带队列深度", async () => {
     rejectedCount: () => 7,
     maxBatchRecords: 200,
     maxBatchBytes: 1024 * 1024,
+    payloadRoot: () => "/tmp/payloads",
     log: () => {},
     post: async (input) => {
       seen.push({

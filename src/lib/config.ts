@@ -12,10 +12,6 @@ export interface Config {
   readonly sessionsDir: string;
   /** 单批请求体上限（字节）。框架不兜底，必须自己限 */
   readonly ingestMaxBytes: number;
-  /** 单条 payload 上限（字节），超出截断并打标 */
-  readonly payloadMaxBytes: number;
-  /** payload 与事件保留天数 */
-  readonly retentionDays: number;
   /** 清理间隔 */
   readonly retentionIntervalMs: number;
   /** 空间回收（VACUUM + checkpoint）间隔 */
@@ -67,8 +63,6 @@ export function loadConfig(env: EnvRecord = process.env): Config {
     tokenPath: join(dataDir, "token"),
     sessionsDir,
     ingestMaxBytes: intFromEnv(env.PI_OBSERVER_INGEST_MAX_BYTES, 2 * 1024 * 1024),
-    payloadMaxBytes: intFromEnv(env.PI_OBSERVER_PAYLOAD_MAX_BYTES, 512 * 1024),
-    retentionDays: intFromEnv(env.PI_OBSERVER_RETENTION_DAYS, 7),
     retentionIntervalMs: intFromEnv(env.PI_OBSERVER_RETENTION_INTERVAL_MS, 60 * 60 * 1000),
     vacuumIntervalMs: intFromEnv(env.PI_OBSERVER_VACUUM_INTERVAL_MS, 24 * 60 * 60 * 1000),
     reconcileDelayMs: intFromEnv(env.PI_OBSERVER_RECONCILE_DELAY_MS, 3000),

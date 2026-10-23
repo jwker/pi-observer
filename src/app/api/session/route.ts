@@ -37,9 +37,12 @@ export async function GET(req: Request): Promise<Response> {
     return Response.json({ ok: true, unchanged: true, version });
   }
 
-  const data = sessionStreamData(sessionId, db);
+  // 带版本号的请求是实时刷新：只回最近的一段，客户端与已有数据合并。
+  // 首屏（没有版本号）仍然给全量，这样「加载更早」能看到完整历史。
+  const live = url.searchParams.get("v") !== null;
+  const data = sessionStreamData(sessionId, db, { live });
   if (data === null) {
     return Response.json({ ok: false, error: "会话不存在" }, { status: 404 });
   }
-  return Response.json({ ok: true, version, data });
+  return Response.json({ ok: true, version, live, data });
 }

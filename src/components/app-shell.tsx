@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { buildSessionStream, turnWindow } from "@/lib/stream.ts";
+import { mergeStreamData, normalizeStreamData } from "@/lib/stream-merge.ts";
 import type { StreamCategory, StreamRow, TurnWindow } from "@/lib/stream.ts";
 import {
   DEFAULT_FILTERS,
@@ -31,6 +32,8 @@ interface SessionResponse {
   ok?: boolean;
   unchanged?: boolean;
   version?: string;
+  /** true 表示这次只带回了最近的一段，需要和已有数据合并 */
+  live?: boolean;
   data?: SessionStreamData;
   error?: string;
 }
@@ -54,6 +57,9 @@ export function AppShell({
   const [filtersReady, setFiltersReady] = useState(false);
   const [openTurns, setOpenTurns] = useState<Set<string>>(new Set());
   const [detail, setDetail] = useState<DetailTarget | null>(null);
+  // 用户正在看 / 点时间线时暂停实时刷新：整页每秒换一次内容会让人点不到东西
+  const [interacting, setInteracting] = useState(false);
+  const paused = interacting || detail !== null;
 
   const selectedIdRef = useRef<string | null>(initialSessionId);
   const dataRef = useRef<SessionStreamData | null>(initialData);
@@ -119,7 +125,13 @@ export function AppShell({
       }
       if (json.data) {
         if (json.version !== undefined) versionRef.current = json.version;
-        setData(json.data);
+        // 实时刷新只带最近的一段：与已有数据合并，全量首屏直接用
+        const incoming = json.data;
+        setData((previous) =>
+          previous === null || json.live !== true
+            ? incoming
+            : mergeStreamData(previous, incoming),
+        );
         setError(null);
         setSessions((previous) =>
           previous.map((session) =>
@@ -222,31 +234,71 @@ export function AppShell({
     }
   }, [filters, filtersReady]);
 
-  // 任何一批写入后服务端都会广播会话更新；当前会话立即重拉，其他会话只刷列表
-  useStreamEvent((event, payload) => {
-    if (event !== "session.updated") return;
+  // 任何一批写入后服务端都会广播会话更新；当前会话立即重拉，其他会话只刷列表。
+  //
+  // 一次模型请求会带来好几条事件（请求、响应、工具起止…），逐条重拉会让页面每秒
+  // 换好几次内容，看着像在闪。这里把它们合并：800 毫秒内只重拉一次。
+  const lastReloadRef = useRef(0);
+  const reloadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pausedRef = useRef(paused);
+  pausedRef.current = paused;
+
+  const reloadNow = useCallback(() => {
+    if (pausedRef.current) return;
+    lastReloadRef.current = Date.now();
     void refreshSessions();
     const current = selectedIdRef.current;
     if (current === null) return;
-    const changed = typeof payload.session_id === "string" ? payload.session_id : current;
-    if (changed === current) {
-      // 带版本号：服务端发现没变化就只回 unchanged，不重复传整套数据
-      void loadStream(current, { version: versionRef.current, showLoading: false });
+    // 带版本号：服务端发现没变化就只回 unchanged，不重复传整套数据
+    void loadStream(current, { version: versionRef.current, showLoading: false });
+  }, [loadStream, refreshSessions]);
+
+  const scheduleReload = useCallback(() => {
+    if (pausedRef.current) return;
+    const wait = 1500 - (Date.now() - lastReloadRef.current);
+    if (wait <= 0) {
+      reloadNow();
+      return;
     }
+    if (reloadTimerRef.current !== null) return;
+    reloadTimerRef.current = setTimeout(() => {
+      reloadTimerRef.current = null;
+      reloadNow();
+    }, wait);
+  }, [reloadNow]);
+
+  useEffect(
+    () => () => {
+      if (reloadTimerRef.current !== null) clearTimeout(reloadTimerRef.current);
+    },
+    [],
+  );
+
+  useStreamEvent((event, payload) => {
+    if (event !== "session.updated") return;
+    const current = selectedIdRef.current;
+    const changed = typeof payload.session_id === "string" ? payload.session_id : current;
+    if (current === null || changed !== current) {
+      // 别的会话有动静：只刷列表
+      void refreshSessions();
+      return;
+    }
+    scheduleReload();
   });
 
-  // 活跃会话每秒轮询；版本号没变时服务端只回一个 unchanged，不做整页重渲染
+  // 活跃会话每 2 秒轮询；版本号没变时服务端只回一个 unchanged，不做整页重渲染。
+  // 用户正在操作时间线时先不刷新——整页换内容会让人点不到东西。
   useEffect(() => {
-    if (selectedId === null || data?.session.state !== "active") return;
+    if (selectedId === null || data?.session.state !== "active" || paused) return;
     const timer = setInterval(() => {
       if (pollingRef.current) return;
       pollingRef.current = true;
       void loadStream(selectedId, { version: versionRef.current, showLoading: false }).finally(() => {
         pollingRef.current = false;
       });
-    }, 1000);
+    }, 2000);
     return () => clearInterval(timer);
-  }, [selectedId, data?.session.state, loadStream]);
+  }, [selectedId, data?.session.state, loadStream, paused]);
 
   // 切会话时时间线停在顶部（最新在上），不做「滚到底部」
   useEffect(() => {
@@ -335,6 +387,7 @@ export function AppShell({
           </main>
         ) : (
           <SessionTimeline
+        onInteractChange={setInteracting}
             session={selected}
             data={data}
             stream={stream}

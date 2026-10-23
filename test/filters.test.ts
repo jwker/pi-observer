@@ -104,7 +104,7 @@ test("版本号：库里没变就一模一样；有新条目就必须变", () =>
 
     f.db
       .prepare(
-        `INSERT INTO messages (session_id, entry_id, parent_id, kind, role, timestamp, entry_index, text, payload)
+        `INSERT INTO messages (session_id, entry_id, parent_id, kind, role, timestamp, entry_index, text, payload_summary)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run("s1", "u2", "a1", "message", "user", T(5000), 3, "再来一条", "{}");

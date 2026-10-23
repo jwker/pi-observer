@@ -30,6 +30,9 @@ export interface EventRow {
   event_type: string;
   run_seq: number | null;
   turn_index: number | null;
+  /** 正文文件路径；完整正文在文件里 */
+  payload_path: string | null;
+  /** 截短后的骨架：时间线要从事件里取工具名、请求序号这类标签 */
   payload: unknown;
   occurred_at: string | null;
   received_at: string;
@@ -98,7 +101,6 @@ export interface RequestIndexRow {
   api: string | null;
   model: string | null;
   payload_bytes: number;
-  payload_truncated: number;
   status: number | null;
   created_at: string;
   run_seq: number | null;
@@ -110,9 +112,12 @@ export interface RequestIndexRow {
   cost: number | null;
 }
 
-/** 请求详情：payload 与响应头已脱敏，解析成对象；usage 来自关联 Turn 的助手消息 */
+/** 请求详情：正文在文件里，详情接口按路径读出来；usage 来自关联 Turn 的助手消息 */
 export interface RequestDetail extends RequestIndexRow {
   correlation: string;
+  /** 正文文件路径；完整正文在文件里 */
+  payload_path: string | null;
+  /** 完整请求体（详情接口按路径读出来填上） */
   payload: unknown;
   response_headers: unknown;
   turn_started_at: string | null;
@@ -177,7 +182,9 @@ export interface MessageDetail {
   entry_index: number;
   /** 完整摘要：`message` 条目是正文，其他类型是一行说明（回填时截到 2 KB） */
   text: string | null;
-  /** 原始条目 JSON；超过上限时是 `{"truncated":true,"bytes":N}` */
+  /** 正文文件路径；完整条目在文件里 */
+  payload_path: string | null;
+  /** 完整条目 JSON（详情接口按路径读出来填上） */
   payload: unknown;
   payload_bytes: number;
 }

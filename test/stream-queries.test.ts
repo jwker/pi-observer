@@ -172,7 +172,7 @@ test("listEvents：时间线可以按 id 倒序取最近事件", () => {
   const f = fixture();
   try {
     const insert = f.db.prepare(
-      `INSERT INTO events (event_id, session_id, layer, event_type, run_seq, turn_index, payload, occurred_at, received_at)
+      `INSERT INTO events (event_id, session_id, layer, event_type, run_seq, turn_index, payload_summary, occurred_at, received_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     insert.run("e1", "s1", "session", "session_start", null, null, "{}", T(0), T(0));
@@ -197,7 +197,7 @@ test("sessionStreamData：一次取全 + totals；getEventDetail 解析 payload"
   try {
     f.db
       .prepare(
-        `INSERT INTO events (event_id, session_id, layer, event_type, run_seq, turn_index, payload, occurred_at, received_at)
+        `INSERT INTO events (event_id, session_id, layer, event_type, run_seq, turn_index, payload_summary, occurred_at, received_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(

@@ -44,6 +44,8 @@ export interface FlushDeps {
   onUnauthorized?: () => void;
   maxBatchRecords: number;
   maxBatchBytes: number;
+  /** 探针写正文文件的根目录；批次里报给服务端做一致性检查 */
+  payloadRoot: () => string | null;
   log: (message: string) => void;
   now?: () => number;
   post?: typeof postBatch;
@@ -97,6 +99,7 @@ export function createFlusher(deps: FlushDeps): Flusher {
         probe_version: PROBE_VERSION,
         dropped_count: deps.queue.droppedCount + deps.rejectedCount(),
         queue_depth: deps.queue.depth,
+        payload_root: deps.payloadRoot(),
         records,
       };
 

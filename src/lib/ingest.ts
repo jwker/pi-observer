@@ -1,3 +1,5 @@
+import { resolve } from "node:path";
+
 import { config } from "./config.ts";
 import { Db, withTx } from "./db.ts";
 import { log } from "./log.ts";
@@ -8,7 +10,12 @@ import {
   type IngestRecord,
   type IngestResponse,
 } from "./protocol.ts";
-import { redact, serializeCapped } from "./redact.ts";
+import {
+  payloadsRoot,
+  readPayloadFile,
+  resolvePayloadPath,
+  summarizePayload,
+} from "./payload-files.ts";
 import { broadcast } from "./sse.ts";
 
 export type ParseResult = { ok: true; batch: IngestBatch } | { ok: false; error: string };
@@ -132,7 +139,7 @@ export function parseBatch(raw: unknown): ParseResult {
           session_id: req(item.session_id, "session_id", errors, at),
           layer: (layer ?? "session") as EventLayer,
           event_type: req(item.event_type, "event_type", errors, at),
-          payload: item.payload ?? null,
+          payload_path: str(item.payload_path),
           occurred_at: str(item.occurred_at),
           run_seq: intOrNull(item.run_seq),
           turn_index: intOrNull(item.turn_index),
@@ -191,9 +198,8 @@ export function parseBatch(raw: unknown): ParseResult {
           provider: str(item.provider),
           api: str(item.api),
           model: str(item.model),
-          payload: item.payload ?? null,
+          payload_path: str(item.payload_path),
           payload_bytes: intOrNull(item.payload_bytes),
-          payload_truncated: boolOrNull(item.payload_truncated),
           status: intOrNull(item.status),
           response_headers: item.response_headers ?? null,
           // 目前只有一种关联方式；显式写出来，避免以后忘记这里是假设
@@ -216,6 +222,7 @@ export function parseBatch(raw: unknown): ParseResult {
       probe_version: str(raw.probe_version) ?? "unknown",
       dropped_count: intOrNull(raw.dropped_count) ?? 0,
       queue_depth: intOrNull(raw.queue_depth) ?? 0,
+      payload_root: str(raw.payload_root),
       records: checked,
     },
   };
@@ -227,26 +234,41 @@ export function parseBatch(raw: unknown): ParseResult {
  * `db` 故意**没有默认值**：写库的调用方必须明说自己写哪个库，
  * 否则测试里漏传时就会静默写进真实的 `data/observer.db`（踩过一次）。
  */
-export function applyBatch(batch: IngestBatch, db: Db): IngestResponse {
-  const maxPayload = config().payloadMaxBytes;
+export function applyBatch(batch: IngestBatch, db: Db, payloadRoot: string = payloadsRoot(config().dataDir)): IngestResponse {
   const applied: Record<string, number> = {};
   const touched = new Set<string>();
   const now = new Date().toISOString();
+  // 探针与服务端的数据目录必须一致，否则服务端按相对路径找不到探针写的文件。
+  if (typeof batch.payload_root === "string" && batch.payload_root !== "" &&
+      resolve(batch.payload_root) !== resolve(payloadRoot)) {
+    log("warn", "ingest", "探针与服务端的正文目录不一致，服务端可能读不到探针写的正文", {
+      probe: batch.payload_root,
+      server: payloadRoot,
+    });
+  }
 
   /**
    * null / undefined 必须落成 SQL NULL，不能落成字符串 "null"：
    * 否则 upsert 里的 `COALESCE(excluded.x, table.x)` 会认为「有新值」而覆盖旧值。
    */
   const jsonOrNull = (value: unknown): string | null =>
-    value === null || value === undefined ? null : serializeCapped(value, maxPayload).json;
+    value === null || value === undefined ? null : JSON.stringify(value);
 
   /**
-   * 请求 payload / 响应头在服务端再脱敏一次（防御纵深）：探针已经脱过，但服务端不能假设
-   * 每个客户端都做对了——否则一个旧探针或手工请求就能把 authorization 原样写进库。
-   * `payload_bytes` 仍是探针给的脱敏前原始长度，不受这里影响。
+   * 事件正文在文件里，库里留一份截短后的骨架：时间线要从事件里取工具名、请求序号这类标签，
+   * 直接读文件会让每次列表查询都去开几十个文件。
    */
-  const redactedJsonOrNull = (value: unknown): string | null =>
-    value === null || value === undefined ? null : serializeCapped(redact(value).value, maxPayload).json;
+  const eventSummary = (relPath: string | null): string | null => {
+    if (relPath === null) return null;
+    if (resolvePayloadPath(payloadRoot, relPath) === null) return null;
+    const content = readPayloadFile(payloadRoot, relPath);
+    if (content === null) return null;
+    try {
+      return JSON.stringify(summarizePayload(JSON.parse(content)));
+    } catch {
+      return null;
+    }
+  };
 
   const bump = (kind: string) => {
     applied[kind] = (applied[kind] ?? 0) + 1;
@@ -320,21 +342,20 @@ export function applyBatch(batch: IngestBatch, db: Db): IngestResponse {
         result_entry_id = COALESCE(excluded.result_entry_id, tool_calls.result_entry_id)
     `);
 
-    // 请求开始时写 payload，响应到达时用同一 (session_id, request_seq) 补状态码与 headers。
-    // 更新记录里 payload / payload_bytes / payload_truncated 为 null：payload 用 COALESCE 保留，
-    // 字节数与截断标记用 MAX 保留（两列 NOT NULL DEFAULT 0，传 0 不会冲掉请求时的值）。
+    // 请求开始时写正文路径，响应到达时用同一 (session_id, request_seq) 补状态码与 headers。
+    // 更新记录里 payload_path / payload_bytes 为 null：路径用 COALESCE 保留，
+    // 字节数用 MAX 保留（两列 NOT NULL DEFAULT 0，传 0 不会冲掉请求时的值）。
     const upsertRequest = db.prepare(`
       INSERT INTO llm_requests (
-        session_id, request_seq, provider, api, model, payload, payload_bytes,
-        payload_truncated, status, response_headers, correlation, created_at, run_seq, turn_index
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        session_id, request_seq, provider, api, model, payload_path, payload_bytes,
+        status, response_headers, correlation, created_at, run_seq, turn_index
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(session_id, request_seq) DO UPDATE SET
         provider = COALESCE(excluded.provider, llm_requests.provider),
         api = COALESCE(excluded.api, llm_requests.api),
         model = COALESCE(excluded.model, llm_requests.model),
-        payload = COALESCE(excluded.payload, llm_requests.payload),
+        payload_path = COALESCE(excluded.payload_path, llm_requests.payload_path),
         payload_bytes = MAX(llm_requests.payload_bytes, excluded.payload_bytes),
-        payload_truncated = MAX(llm_requests.payload_truncated, excluded.payload_truncated),
         status = COALESCE(excluded.status, llm_requests.status),
         response_headers = COALESCE(excluded.response_headers, llm_requests.response_headers),
         run_seq = COALESCE(excluded.run_seq, llm_requests.run_seq),
@@ -343,8 +364,9 @@ export function applyBatch(batch: IngestBatch, db: Db): IngestResponse {
 
     // 普通事件幂等忽略：同一 event_id 重复推送时不覆盖首次落库的内容。
     const insertEvent = db.prepare(`
-      INSERT INTO events (event_id, session_id, layer, event_type, run_seq, turn_index, payload, occurred_at, received_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO events (event_id, session_id, layer, event_type, run_seq, turn_index,
+                          payload_path, payload_summary, occurred_at, received_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(event_id) DO NOTHING
     `);
 
@@ -419,6 +441,7 @@ export function applyBatch(batch: IngestBatch, db: Db): IngestResponse {
           break;
         }
         case "event": {
+          const eventPath = record.payload_path ?? null;
           insertEvent.run(
             record.event_id,
             record.session_id,
@@ -426,7 +449,8 @@ export function applyBatch(batch: IngestBatch, db: Db): IngestResponse {
             record.event_type,
             record.run_seq,
             record.turn_index,
-            jsonOrNull(record.payload),
+            eventPath,
+            eventSummary(eventPath),
             record.occurred_at,
             now,
           );
@@ -435,17 +459,18 @@ export function applyBatch(batch: IngestBatch, db: Db): IngestResponse {
           break;
         }
         case "request": {
+          const requestPath = record.payload_path ?? null;
+          const requestBytes = record.payload_bytes ?? null;
           upsertRequest.run(
             record.session_id,
             record.request_seq,
             record.provider,
             record.api,
             record.model,
-            redactedJsonOrNull(record.payload),
-            record.payload_bytes ?? 0,
-            record.payload_truncated === null ? 0 : record.payload_truncated ? 1 : 0,
+            requestPath,
+            requestBytes ?? 0,
             record.status,
-            redactedJsonOrNull(record.response_headers),
+            jsonOrNull(record.response_headers),
             record.correlation,
             record.created_at,
             record.run_seq,

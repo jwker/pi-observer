@@ -5,6 +5,7 @@
  * 而 Pi 通常跑在用户自己的项目目录里。这里改成「相对探针文件位置」，即 pi-observer 仓库下的
  * `data/token`，这样无论 Pi 在哪个目录启动都能找到。要覆盖就设 `PI_OBSERVER_TOKEN_FILE`。
  */
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export interface ProbeConfig {
@@ -23,8 +24,8 @@ export interface ProbeConfig {
   /** 队列上限（PRD §7.4：2,000 条 / 64 MB） */
   maxQueueRecords: number;
   maxQueueBytes: number;
-  /** 单条记录上限（PRD §7.4：512 KB） */
-  maxRecordBytes: number;
+  /** 正文文件根目录；正文不再随批次传输，改为写文件 */
+  payloadDir: string;
   /** 每次模型请求往日志写一行采集摘要（长度 / 脱敏数 / 是否截断），默认关闭 */
   debugRequests: boolean;
   /** 同时把探针日志打到 stderr（默认只写 data/probe.log，不打扰用户的终端） */
@@ -52,18 +53,21 @@ export function defaultTokenFile(): string {
 
 export function loadProbeConfig(env: Record<string, string | undefined> = process.env): ProbeConfig {
   const baseUrl = (env.PI_OBSERVER_URL?.trim() || "http://127.0.0.1:4173").replace(/\/+$/, "");
+  const tokenFile = env.PI_OBSERVER_TOKEN_FILE?.trim() || defaultTokenFile();
   return {
     baseUrl,
     ingestUrl: `${baseUrl}/api/ingest`,
     healthUrl: `${baseUrl}/api/health`,
-    tokenFile: env.PI_OBSERVER_TOKEN_FILE?.trim() || defaultTokenFile(),
+    tokenFile,
     batchSize: intFromEnv(env.PI_OBSERVER_BATCH_SIZE, 50),
     batchIntervalMs: intFromEnv(env.PI_OBSERVER_BATCH_INTERVAL_MS, 300),
     maxBatchRecords: intFromEnv(env.PI_OBSERVER_MAX_BATCH_RECORDS, 200),
     maxBatchBytes: intFromEnv(env.PI_OBSERVER_MAX_BATCH_BYTES, 1536 * 1024),
     maxQueueRecords: intFromEnv(env.PI_OBSERVER_MAX_QUEUE_RECORDS, 2000),
     maxQueueBytes: intFromEnv(env.PI_OBSERVER_MAX_QUEUE_BYTES, 64 * 1024 * 1024),
-    maxRecordBytes: intFromEnv(env.PI_OBSERVER_MAX_RECORD_BYTES, 512 * 1024),
+    // 正文目录跟着**实际用的**令牌文件走（不是默认路径）：
+    // 令牌指到别处时，正文也必须写到同一个数据目录，否则服务端按相对路径找不到正文。
+    payloadDir: env.PI_OBSERVER_PAYLOAD_DIR?.trim() || join(dirname(tokenFile), "payloads"),
     debugRequests: boolFromEnv(env.PI_OBSERVER_DEBUG_REQUESTS, false),
     debug: boolFromEnv(env.PI_OBSERVER_DEBUG, false),
   };

@@ -11,7 +11,7 @@
  * 旧行保持 NULL。要改列类型或加非空约束则必须先想清楚旧数据怎么办。
  */
 
-export const SCHEMA_VERSION = 5;
+export const SCHEMA_VERSION = 6;
 
 export const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS sessions (
@@ -93,9 +93,10 @@ CREATE TABLE IF NOT EXISTS llm_requests (
   provider           TEXT,
   api                TEXT,
   model              TEXT,
-  payload            TEXT,
+  -- v6：正文不落库。完整请求体在 data/payloads/request/<会话>/<序号>.json，
+  -- 这里只留相对路径与原始字节数。
+  payload_path       TEXT,
   payload_bytes      INTEGER NOT NULL DEFAULT 0,
-  payload_truncated  INTEGER NOT NULL DEFAULT 0,
   status             INTEGER,
   response_headers   TEXT,
   correlation        TEXT NOT NULL DEFAULT 'serial_assumed',
@@ -113,7 +114,9 @@ CREATE TABLE IF NOT EXISTS events (
   event_type   TEXT NOT NULL,
   run_seq      INTEGER,
   turn_index   INTEGER,
-  payload      TEXT,
+  -- v6：正文不落库。完整事件正文在文件里，库里留一份截短后的骨架供时间线取标签。
+  payload_path    TEXT,
+  payload_summary TEXT,
   occurred_at  TEXT,
   received_at  TEXT NOT NULL
 );
@@ -139,7 +142,10 @@ CREATE TABLE IF NOT EXISTS messages (
   timestamp    TEXT,
   entry_index  INTEGER NOT NULL DEFAULT 0,
   text         TEXT,
-  payload      TEXT,
+  -- v6：正文不落库。完整条目在 data/payloads/message/<会话>/<条目>.json，
+  -- 库里留一份截短后的骨架：时间线与工具列表的查询直接读它的结构。
+  payload_path    TEXT,
+  payload_summary TEXT,
   UNIQUE (session_id, entry_id)
 );
 

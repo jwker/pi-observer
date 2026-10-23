@@ -8,10 +8,10 @@
  * 见 tools/acceptance/real-pi/ 与 docs/prd-v0.2.md §14。
  *
  * **记录形状与 `ext/index.ts` 发出的完全一致**——它就是「探针 ↔ 服务端」的唯一线上契约，
- * 见 src/lib/protocol.ts（协议 v3）。
+ * 见 src/lib/protocol.ts（协议 v4）。
  */
 import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import {
   Checks,
@@ -34,13 +34,13 @@ import {
   waitForHealth,
 } from "./lib/harness.mjs";
 
-const PROTOCOL = 3;
+const PROTOCOL = 4;
 const SID = "accept-offline";
 const CWD = "/tmp/accept-offline";
 /** 放进正文里，用于确认「内容确实从会话文件到了页面」 */
 const MARKER = "验收正文标记-ACCEPT-OFFLINE-TEXT";
 
-// ── 协议 v3 的记录形状（对应 src/lib/protocol.ts）────────────────────────
+// ── 协议 v4 的记录形状（对应 src/lib/protocol.ts）────────────────────────
 
 const sessionRecord = (overrides = {}) => ({
   kind: "session",
@@ -74,7 +74,8 @@ const eventRecord = (eventId, { layer = "agent", type = "agent_settled", payload
   session_id: SID,
   layer,
   event_type: type,
-  payload,
+  // v4：正文在文件里，批次只带路径
+  payload_path: `event/${SID}/${eventId}.json`,
   occurred_at: nowIso(),
   run_seq: group.run_seq ?? 1,
   turn_index: group.turn_index ?? 0,
@@ -125,9 +126,8 @@ const requestRecord = (overrides = {}) => ({
   provider: "accept-provider",
   api: "accept-api",
   model: "accept-model",
-  payload: { messages: [{ role: "user", content: MARKER }] },
+  payload_path: `request/${SID}/1.json`,
   payload_bytes: 512,
-  payload_truncated: false,
   status: null,
   response_headers: null,
   correlation: "serial_assumed",
@@ -232,7 +232,7 @@ try {
   }
   console.log(`· 隔离实例：${base}；数据目录 ${dataDir}\n`);
 
-  await checks.check("A1", "健康检查：协议 v3、schema 版本、探针状态如实为空", async () => {
+  await checks.check("A1", "健康检查：协议 v4、schema 版本、探针状态如实为空", async () => {
     assertEqual(health.ok, true, "ok");
     assertEqual(health.service, "pi-observer", "service");
     assertEqual(health.protocol, PROTOCOL, "protocol");
@@ -269,7 +269,8 @@ try {
     const body = JSON.stringify(
       envelope([
         sessionRecord(),
-        eventRecord(`${SID}-oversize`, { payload: { note: "y".repeat(2_600_000) } }),
+        // 正文不在批次里了，用一个未知字段把请求体撑到上限之外
+        { ...eventRecord(`${SID}-oversize`), oversize: "y".repeat(2_600_000) },
       ]),
     );
     const mb = (Buffer.byteLength(body, "utf8") / 1024 / 1024).toFixed(1);
@@ -282,20 +283,22 @@ try {
     return `${mb} MB → 413（上限 2 MB），且库里仍然 0 条会话`;
   });
 
-  await checks.check("A6", "协议版本不对的整批被拒（v2 探针不能混进来）", async () => {
-    const response = await postBatch(base, token, {
-      protocol: 2,
-      probe_version: "old-probe",
-      dropped_count: 0,
-      queue_depth: 0,
-      records: [sessionRecord()],
-    });
-    assertEqual(response.status, 400, "v2 批次的状态码");
-    assertIncludes(response.json?.error ?? response.text, "协议版本不匹配", "错误信息要说明是协议问题");
+  await checks.check("A6", "旧协议的整批被拒（正文只走文件，不再兼容 v3）", async () => {
+    for (const protocol of [2, 3]) {
+      const response = await postBatch(base, token, {
+        protocol,
+        probe_version: "old-probe",
+        dropped_count: 0,
+        queue_depth: 0,
+        records: [sessionRecord()],
+      });
+      assertEqual(response.status, 400, `protocol ${protocol} 批次的状态码`);
+      assertIncludes(response.json?.error ?? response.text, "协议版本不匹配", "错误信息要说明是协议问题");
+    }
 
     const list = await getJson(`${base}/api/sessions`);
     assertEqual(list.json.count, 0, "被拒批次之后库里仍是 0 条会话");
-    return "protocol 2 → 400（整批拒绝，提示升级探针），库里没有留下半条";
+    return "protocol 2 / 3 → 400（整批拒绝，提示升级探针），库里没有留下半条";
   });
 
   await checks.check("A6b", "拒批原因从 /api/health 读得到（页面能解释「已丢弃 N 条」）", async () => {
@@ -443,24 +446,31 @@ try {
     return `事件数保持 ${beforeEvents} 条、工具数保持 ${beforeTools} 条`;
   });
 
-  await checks.check("A9", "单条超大 payload 被截断并打标", async () => {
-    const id = track(`${SID}-cap`);
-    const note = "y".repeat(1_800_000);
+  await checks.check("A9", "正文不进库：库里只留路径与骨架", async () => {
+    const id = track(`${SID}-body`);
+    // 模拟探针：正文写文件，批次里只带路径
+    const relPath = `event/${SID}/${id}.json`;
+    const absPath = join(dataDir, "payloads", relPath);
+    mkdirSync(dirname(absPath), { recursive: true });
+    const body = { note: "y".repeat(1_800_000), kind: "big" };
+    writeFileSync(absPath, JSON.stringify(body), "utf8");
+
     const response = await postBatch(
       base,
       token,
-      envelope([sessionRecord(), eventRecord(id, { payload: { note } })]),
+      envelope([sessionRecord(), { ...eventRecord(id), payload_path: relPath }]),
     );
-    assertEqual(response.status, 200, "1.8 MB 单条 payload 的写入状态码");
+    assertEqual(response.status, 200, "带正文路径的批次状态码");
 
     const db = await openTempDb(dataDir);
     try {
-      const row = db.prepare("SELECT payload FROM events WHERE event_id = ?").get(id);
+      const row = db.prepare("SELECT payload_path, payload_summary FROM events WHERE event_id = ?").get(id);
       assert(row !== undefined && row !== null, "库里找不到这条事件");
-      const stored = JSON.parse(row.payload);
-      assertEqual(stored.truncated, true, "payload.truncated");
-      assert(stored.bytes > 1_000_000, `payload.bytes 应接近原始长度，实际 ${stored.bytes}`);
-      return `入库为 ${row.payload}（原始 ${stored.bytes} 字节，超过 512 KB 上限）`;
+      assertEqual(row.payload_path, relPath, "库里存的是正文路径");
+      const summary = JSON.parse(row.payload_summary ?? "null");
+      assertEqual(summary.kind, "big", "骨架保留结构");
+      assert(summary.note.length < 1_800_000, "骨架里的长字符串被截短");
+      return `库里只有路径与骨架（骨架 ${String(row.payload_summary).length} 字节，正文 ${body.note.length} 字节在文件里）`;
     } finally {
       db.close();
     }
@@ -953,7 +963,7 @@ try {
     });
 
     // ── 档 A 续：模型请求的脱敏与落库 ───────────────────────────────────
-    await checks.check("A24", "模型请求：payload 脱敏、原始字节数、响应状态与 headers 落库", async () => {
+    await checks.check("A24", "模型请求：正文路径、字节数、响应状态与 headers 落库", async () => {
       const payload = {
         model: "accept-model",
         messages: [{ role: "user", content: "请求正文标记-ACCEPT-REQUEST" }],
@@ -961,6 +971,11 @@ try {
         headers: { "x-api-key": "accept-key" },
       };
       const payloadBytes = Buffer.byteLength(JSON.stringify(payload), "utf8");
+      // 正文写文件，批次里只带路径
+      const relPath = `request/${BF_SID}/1.json`;
+      mkdirSync(dirname(join(bfDataDir, "payloads", relPath)), { recursive: true });
+      writeFileSync(join(bfDataDir, "payloads", relPath), JSON.stringify(payload), "utf8");
+
       const baseRecord = {
         kind: "request",
         session_id: BF_SID,
@@ -973,18 +988,18 @@ try {
 
       const started = await postBatch(bfBase, bfToken, {
         protocol: PROTOCOL,
-        probe_version: "0.3.0",
+        probe_version: "0.4.0",
         dropped_count: 0,
         queue_depth: 0,
+        payload_root: join(bfDataDir, "payloads"),
         records: [
           {
             ...baseRecord,
             provider: "accept-provider",
             api: "accept-api",
             model: "accept-model",
-            payload,
+            payload_path: relPath,
             payload_bytes: payloadBytes,
-            payload_truncated: false,
             status: null,
             response_headers: null,
           },
@@ -994,7 +1009,7 @@ try {
             session_id: BF_SID,
             layer: "provider",
             event_type: "provider_request",
-            payload: { requestSeq: 1, payloadBytes },
+            payload_path: `event/${BF_SID}/accept-provider-request-1.json`,
             occurred_at: nowIso(),
             run_seq: 1,
             turn_index: 0,
@@ -1005,18 +1020,18 @@ try {
 
       const answered = await postBatch(bfBase, bfToken, {
         protocol: PROTOCOL,
-        probe_version: "0.3.0",
+        probe_version: "0.4.0",
         dropped_count: 0,
         queue_depth: 0,
+        payload_root: join(bfDataDir, "payloads"),
         records: [
           {
             ...baseRecord,
             provider: null,
             api: null,
             model: null,
-            payload: null,
+            payload_path: null,
             payload_bytes: null,
-            payload_truncated: null,
             status: 200,
             response_headers: { authorization: "secret-value", "x-ds-trace-id": "trace-accept" },
           },
@@ -1026,7 +1041,7 @@ try {
             session_id: BF_SID,
             layer: "provider",
             event_type: "provider_response",
-            payload: { requestSeq: 1, status: 200 },
+            payload_path: `event/${BF_SID}/accept-provider-response-1.json`,
             occurred_at: nowIso(),
             run_seq: 1,
             turn_index: 0,
@@ -1042,18 +1057,19 @@ try {
           .all(BF_SID);
         assertEqual(rows.length, 1, "同一 (session_id, request_seq) 只有一行");
         const row = rows[0];
-        const stored = JSON.parse(row.payload);
-        assertEqual(stored.authorization, "[redacted]", "authorization 被脱敏");
-        assertEqual(stored.headers["x-api-key"], "[redacted]", "x-api-key 被脱敏");
-        assertIncludes(stored.messages[0].content, "ACCEPT-REQUEST", "正文照常保留");
-        assertEqual(row.payload_bytes, payloadBytes, "payload_bytes 是脱敏前的原始字节数");
-        assertEqual(row.payload_truncated, 0, "未超限不打截断标");
+        assertEqual(row.payload_path, relPath, "库里存的是正文路径");
+        assertEqual(row.payload_bytes, payloadBytes, "payload_bytes 是原始字节数");
         assertEqual(row.status, 200, "响应状态码");
         assertEqual(row.model, "accept-model", "模型来自请求记录");
         assertEqual(row.correlation, "serial_assumed", "关联方式");
         const headers = JSON.parse(row.response_headers);
-        assertEqual(headers.authorization, "[redacted]", "响应头里的凭据也被脱敏");
+        assertEqual(headers.authorization, "secret-value", "不再脱敏");
         assertEqual(headers["x-ds-trace-id"], "trace-accept", "普通响应头保留");
+
+        // 正文确实在文件里，而且没进库
+        const onDisk = JSON.parse(readFileSync(join(bfDataDir, "payloads", relPath), "utf8"));
+        assertIncludes(onDisk.messages[0].content, "ACCEPT-REQUEST", "文件里是完整正文");
+        assertEqual(row.payload, undefined, "库里没有正文列");
 
         const events = db
           .prepare("SELECT event_type FROM events WHERE session_id = ? AND event_type LIKE 'provider_%' ORDER BY id")
@@ -1064,10 +1080,9 @@ try {
         db.close();
       }
 
-      return `1 条请求：payload_bytes ${payloadBytes} 与原始长度一致；authorization / x-api-key / 响应头凭据都已脱敏；status 200；时间线 2 条事件`;
+      return `1 条请求：库里只有正文路径与 ${payloadBytes} 字节数，正文在文件里；status 200；时间线 2 条事件`;
     });
 
-    // ── 档 A 续：用量汇总口径 ───────────────────────────────────────────
     await checks.check("A25", "用量汇总：会话级与 Turn 级 token / 缓存 / 成本口径一致", async () => {
       const stream = await getJson(`${bfBase}/api/session?id=${BF_SID}`);
       const data = stream.json.data;
@@ -1105,52 +1120,44 @@ try {
 
   // 服务已停，可以直接写临时库了
   try {
-    await checks.check("A26", "保留期：过期 payload 被清空、事件被删除，元信息留着", async () => {
+    await checks.check("A26", "不再自动清理：过期的条目与事件都留着", async () => {
       const { openDb } = await import("../../src/lib/db.ts");
       const { applyRetention } = await import("../../src/lib/retention.ts");
       const writable = openDb(join(bfDataDir, "observer.db"));
       try {
-        // 造两条 8 天前的数据
         const old = "2026-10-01T00:00:00.000Z";
         writable
           .prepare(
-            `INSERT INTO messages (session_id, entry_id, parent_id, kind, role, timestamp, entry_index, text, payload)
+            `INSERT INTO messages (session_id, entry_id, parent_id, kind, role, timestamp, entry_index, text, payload_summary)
              VALUES (?, 'old-entry', NULL, 'message', 'user', ?, 900, '旧消息', '{"a":1}')`,
           )
           .run(BF_SID, old);
         writable
           .prepare(
-            `INSERT INTO events (event_id, session_id, layer, event_type, payload, occurred_at, received_at)
+            `INSERT INTO events (event_id, session_id, layer, event_type, payload_summary, occurred_at, received_at)
              VALUES ('old-event', ?, 'agent', 'agent_settled', '{}', ?, ?)`,
           )
           .run(BF_SID, old, old);
-        const beforeRows = writable.prepare("SELECT COUNT(*) AS n FROM messages").get().n;
 
-        // 保留期是 7 天：把「现在」推到 8 天后
+        // 「现在」推到 8 天后：以前会清数据，现在什么都不清
         const shifted = new Date(Date.now() + 8 * 24 * 60 * 60 * 1000);
         const outcome = applyRetention(writable, shifted);
-        assert(outcome.messages >= 1, "过期条目的 payload 应被清空");
-        assert(outcome.events >= 1, "过期事件应被删除");
-
-        const oldRow = writable
-          .prepare("SELECT payload, text FROM messages WHERE entry_id = 'old-entry'")
-          .get();
-        assertEqual(oldRow.payload, '{"deleted":true}', "过期条目的 payload");
-        assertEqual(oldRow.text, "旧消息", "摘要留着");
+        assertEqual(outcome.messages, 0, "不再清空条目正文");
+        assertEqual(outcome.events, 0, "不再删除事件");
         assertEqual(
-          writable.prepare("SELECT COUNT(*) AS n FROM messages").get().n,
-          beforeRows,
-          "行不会被删（删行会让时间线的行号对不上）",
+          writable.prepare("SELECT COUNT(*) AS n FROM messages WHERE entry_id = 'old-entry'").get().n,
+          1,
+          "过期条目留着",
         );
         assertEqual(
           writable.prepare("SELECT COUNT(*) AS n FROM events WHERE event_id = 'old-event'").get().n,
-          0,
-          "过期事件整行删除",
+          1,
+          "过期事件留着",
         );
       } finally {
         writable.close();
       }
-      return "过期条目的 payload 清空为 {deleted:true}、行保留；过期事件整行删除；元信息不变";
+      return "不再按天清数据：条目与事件都留着，容量由使用者自己控制";
     });
 
     await checks.check("A27", "状态自愈：文件已不存在的会话不再停在「进行中」", async () => {

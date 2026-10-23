@@ -180,23 +180,33 @@ export function listEvents(sessionId: string, query: EventQuery = {}, db: Db = g
 
   const rows = db
     .prepare(
-      `SELECT id, event_id, session_id, layer, event_type, run_seq, turn_index, payload, occurred_at, received_at
+      `SELECT id, event_id, session_id, layer, event_type, run_seq, turn_index,
+              payload_path, payload_summary, occurred_at, received_at
          FROM events
         WHERE ${clauses.join(" AND ")}
         ORDER BY id ${query.order === "desc" ? "DESC" : "ASC"}
         LIMIT ?`,
     )
-    .all(...(params as never[])) as unknown as Array<Omit<EventRow, "payload"> & { payload: string | null }>;
+    .all(...(params as never[])) as unknown as Array<
+    Omit<EventRow, "payload"> & { payload_summary: string | null }
+  >;
 
+  // payload 列里现在是截短后的骨架：时间线要从事件里取工具名、请求序号这类标签
   return rows.map((row) =>
     plain({
       ...row,
-      payload: row.payload === null ? null : safeParse(row.payload),
+      payload: row.payload_summary === null ? null : safeParse(row.payload_summary),
     }),
   );
 }
 
-export function listTurns(sessionId: string, limit = 200, db: Db = getDb()): TurnRow[] {
+export function listTurns(
+  sessionId: string,
+  limit = 200,
+  db: Db = getDb(),
+  options: { recent?: boolean } = {},
+): TurnRow[] {
+  const recent = options.recent === true;
   const rows = db
     .prepare(
       `SELECT id, session_id, run_seq, turn_index, message_entry_id, started_at, ended_at,
@@ -204,22 +214,29 @@ export function listTurns(sessionId: string, limit = 200, db: Db = getDb()): Tur
               COALESCE(cache_read, json_extract(assistant_message, '$.usage.cacheRead'))   AS cache_read,
               COALESCE(cache_write, json_extract(assistant_message, '$.usage.cacheWrite')) AS cache_write
          FROM turns WHERE session_id = ?
-        ORDER BY run_seq ASC, turn_index ASC
+        ORDER BY run_seq ${recent ? "DESC" : "ASC"}, turn_index ${recent ? "DESC" : "ASC"}
         LIMIT ?`,
     )
     .all(sessionId, limit) as unknown as TurnRow[];
-  return rows.map(plain);
+  const plain_ = rows.map(plain);
+  return recent ? plain_.reverse() : plain_;
 }
 
 /** 工具列表（PRD §11.2 视图三 / M3-4）：参数 / 结果按条目引用 join messages，只带字节数与参数预览 */
-export function listToolCallIndex(sessionId: string, limit = 500, db: Db = getDb()): ToolCallIndexRow[] {
+export function listToolCallIndex(
+  sessionId: string,
+  limit = 500,
+  db: Db = getDb(),
+  options: { recent?: boolean } = {},
+): ToolCallIndexRow[] {
+  const recent = options.recent === true;
   const rows = db
     .prepare(
       `WITH resolved AS (
          SELECT tc.*,
                 COALESCE(
                   (SELECT json_extract(j.value, '$.arguments')
-                     FROM messages m, json_each(m.payload, '$.message.content') j
+                     FROM messages m, json_each(m.payload_summary, '$.message.content') j
                     WHERE m.session_id = tc.session_id
                       AND m.entry_id = tc.entry_id
                       AND json_extract(j.value, '$.type') = 'toolCall'
@@ -228,7 +245,7 @@ export function listToolCallIndex(sessionId: string, limit = 500, db: Db = getDb
                   tc.args
                 ) AS args_json,
                 COALESCE(
-                  (SELECT json_extract(m2.payload, '$.message')
+                  (SELECT json_extract(m2.payload_summary, '$.message')
                      FROM messages m2
                     WHERE m2.session_id = tc.session_id
                       AND m2.entry_id = tc.result_entry_id),
@@ -241,15 +258,16 @@ export function listToolCallIndex(sessionId: string, limit = 500, db: Db = getDb
               started_at, ended_at, run_seq, turn_index, entry_id, result_entry_id,
               COALESCE(LENGTH(CAST(args_json AS TEXT)), 0) AS args_bytes,
               COALESCE(LENGTH(CAST(result_json AS TEXT)), 0) AS result_bytes,
-              substr(CAST(args_json AS TEXT), 1, 500) AS args_preview,
+              substr(CAST(args_json AS TEXT), 1, 200) AS args_preview,
               CASE WHEN json_valid(result_json)
-                   THEN substr(json_extract(result_json, '$.content[0].text'), 1, 500) END AS result_preview
+                   THEN substr(json_extract(result_json, '$.content[0].text'), 1, 200) END AS result_preview
          FROM resolved
-        ORDER BY COALESCE(started_at, '') ASC
+        ORDER BY COALESCE(started_at, '') ${recent ? "DESC" : "ASC"}
         LIMIT ?`,
     )
     .all(sessionId, limit) as unknown as ToolCallIndexRow[];
-  return rows.map(plain);
+  const plain_ = rows.map(plain);
+  return recent ? plain_.reverse() : plain_;
 }
 
 export function countToolCalls(sessionId: string, db: Db = getDb()): number {
@@ -265,7 +283,7 @@ export function getToolCallDetail(sessionId: string, toolCallId: string, db: Db 
          SELECT tc.*,
                 COALESCE(
                   (SELECT json_extract(j.value, '$.arguments')
-                     FROM messages m, json_each(m.payload, '$.message.content') j
+                     FROM messages m, json_each(m.payload_summary, '$.message.content') j
                     WHERE m.session_id = tc.session_id
                       AND m.entry_id = tc.entry_id
                       AND json_extract(j.value, '$.type') = 'toolCall'
@@ -274,7 +292,7 @@ export function getToolCallDetail(sessionId: string, toolCallId: string, db: Db 
                   tc.args
                 ) AS args_json,
                 COALESCE(
-                  (SELECT json_extract(m2.payload, '$.message')
+                  (SELECT json_extract(m2.payload_summary, '$.message')
                      FROM messages m2
                     WHERE m2.session_id = tc.session_id
                       AND m2.entry_id = tc.result_entry_id),
@@ -287,9 +305,9 @@ export function getToolCallDetail(sessionId: string, toolCallId: string, db: Db 
               started_at, ended_at, run_seq, turn_index, entry_id, result_entry_id,
               COALESCE(LENGTH(CAST(args_json AS TEXT)), 0) AS args_bytes,
               COALESCE(LENGTH(CAST(result_json AS TEXT)), 0) AS result_bytes,
-              substr(CAST(args_json AS TEXT), 1, 500) AS args_preview,
+              substr(CAST(args_json AS TEXT), 1, 200) AS args_preview,
               CASE WHEN json_valid(result_json)
-                   THEN substr(json_extract(result_json, '$.content[0].text'), 1, 500) END AS result_preview,
+                   THEN substr(json_extract(result_json, '$.content[0].text'), 1, 200) END AS result_preview,
               args_json AS args, result_json AS result
          FROM resolved`,
     )
@@ -316,7 +334,7 @@ export function listRequests(sessionId: string, limit = 200, db: Db = getDb()): 
   const rows = db
     .prepare(
       `SELECT r.id, r.session_id, r.request_seq, r.provider, r.api, r.model,
-              r.payload_bytes, r.payload_truncated, r.status, r.created_at,
+              r.payload_bytes, r.status, r.created_at,
               r.run_seq, r.turn_index,
               COALESCE(LENGTH(r.response_headers), 0) AS response_headers_bytes,
               t.tokens_in, t.tokens_out, t.cost
@@ -346,13 +364,13 @@ export function getRequestDetail(sessionId: string, requestSeq: number, db: Db =
   const row = db
     .prepare(
       `SELECT r.id, r.session_id, r.request_seq, r.provider, r.api, r.model,
-              r.payload_bytes, r.payload_truncated, r.status, r.created_at,
-              r.run_seq, r.turn_index, r.correlation, r.payload, r.response_headers,
+              r.payload_bytes, r.status, r.created_at,
+              r.run_seq, r.turn_index, r.correlation, r.payload_path, r.response_headers,
               COALESCE(LENGTH(r.response_headers), 0) AS response_headers_bytes,
               t.tokens_in, t.tokens_out, t.cost,
               t.started_at AS turn_started_at, t.ended_at AS turn_ended_at,
               t.stop_reason AS turn_stop_reason,
-              COALESCE(json_extract(tm.payload, '$.message.usage'),
+              COALESCE(json_extract(tm.payload_summary, '$.message.usage'),
                        json_extract(t.assistant_message, '$.usage')) AS turn_usage_json
          FROM llm_requests r
          LEFT JOIN turns t
@@ -367,7 +385,7 @@ export function getRequestDetail(sessionId: string, requestSeq: number, db: Db =
     )
     .get(sessionId, requestSeq) as
     | (Omit<RequestDetail, "payload" | "response_headers" | "turn_usage"> & {
-        payload: string | null;
+        payload_path: string | null;
         response_headers: string | null;
         turn_usage_json: string | null;
       })
@@ -378,7 +396,8 @@ export function getRequestDetail(sessionId: string, requestSeq: number, db: Db =
   const { turn_usage_json: _usageJson, ...rest } = row;
   return plain({
     ...rest,
-    payload: row.payload === null ? null : safeParse(row.payload),
+    // 正文在文件里，这里先给 null，由详情接口按 payload_path 读出来填上
+    payload: null,
     response_headers: row.response_headers === null ? null : safeParse(row.response_headers),
     turn_usage: usage,
   }) as RequestDetail;
@@ -399,14 +418,17 @@ export function getMessageDetail(sessionId: string, entryId: string, db: Db = ge
   const row = db
     .prepare(
       `SELECT entry_id, parent_id, kind, role, timestamp, entry_index, text,
-              COALESCE(LENGTH(payload), 0) AS payload_bytes, payload
+              COALESCE(LENGTH(payload_summary), 0) AS payload_bytes, payload_path, payload_summary
          FROM messages WHERE session_id = ? AND entry_id = ?`,
     )
-    .get(sessionId, entryId) as unknown as Omit<MessageDetail, "payload"> & { payload: string | null } | undefined;
+    .get(sessionId, entryId) as unknown as
+    | (Omit<MessageDetail, "payload"> & { payload_path: string | null; payload_summary: string | null })
+    | undefined;
   if (row === undefined) return null;
   return plain({
     ...row,
-    payload: row.payload === null ? null : safeParse(row.payload),
+    // 正文在文件里，详情接口按 payload_path 读出来填上；这里先给骨架
+    payload: row.payload_summary === null ? null : safeParse(row.payload_summary),
   });
 }
 
@@ -420,25 +442,29 @@ export function listTimelineMessages(
   sessionId: string,
   limit = 20000,
   db: Db = getDb(),
+  options: { recent?: boolean } = {},
 ): TimelineMessageRow[] {
+  const recent = options.recent === true;
   const rows = db
     .prepare(
-      `SELECT m.entry_id, m.parent_id, m.kind, m.role, m.timestamp, m.entry_index, m.text,
-              (SELECT substr(json_extract(j.value, '$.thinking'), 1, 2000)
-                 FROM json_each(CASE WHEN json_valid(m.payload)
-                                      AND json_type(m.payload, '$.message.content') = 'array'
-                                     THEN m.payload ELSE '{}' END,
+      `SELECT m.entry_id, m.parent_id, m.kind, m.role, m.timestamp, m.entry_index,
+              substr(m.text, 1, 600) AS text,
+              (SELECT substr(json_extract(j.value, '$.thinking'), 1, 400)
+                 FROM json_each(CASE WHEN json_valid(m.payload_summary)
+                                      AND json_type(m.payload_summary, '$.message.content') = 'array'
+                                     THEN m.payload_summary ELSE '{}' END,
                                 '$.message.content') j
                 WHERE json_extract(j.value, '$.type') = 'thinking'
                 LIMIT 1) AS thinking,
-              COALESCE(LENGTH(m.payload), 0) AS payload_bytes
+              COALESCE(LENGTH(m.payload_summary), 0) AS payload_bytes
          FROM messages m
         WHERE m.session_id = ?
-        ORDER BY m.entry_index ASC
+        ORDER BY m.entry_index ${recent ? "DESC" : "ASC"}
         LIMIT ?`,
     )
     .all(sessionId, limit) as unknown as TimelineMessageRow[];
-  return rows.map(plain);
+  const plain_ = rows.map(plain);
+  return recent ? plain_.reverse() : plain_;
 }
 
 export function countTurns(sessionId: string, db: Db = getDb()): number {
@@ -455,14 +481,18 @@ export function countEvents(sessionId: string, db: Db = getDb()): number {
 export function getEventDetail(sessionId: string, eventId: string, db: Db = getDb()): EventRow | null {
   const row = db
     .prepare(
-      `SELECT id, event_id, session_id, layer, event_type, run_seq, turn_index, payload, occurred_at, received_at
+      `SELECT id, event_id, session_id, layer, event_type, run_seq, turn_index,
+              payload_path, payload_summary, occurred_at, received_at
          FROM events WHERE session_id = ? AND event_id = ?`,
     )
-    .get(sessionId, eventId) as unknown as (Omit<EventRow, "payload"> & { payload: string | null }) | undefined;
+    .get(sessionId, eventId) as unknown as
+    | (Omit<EventRow, "payload"> & { payload_path: string | null; payload_summary: string | null })
+    | undefined;
   if (row === undefined) return null;
   return plain({
     ...row,
-    payload: row.payload === null ? null : safeParse(row.payload),
+    // 正文在文件里，详情接口按 payload_path 读出来填上；这里先给骨架
+    payload: row.payload_summary === null ? null : safeParse(row.payload_summary),
   }) as EventRow;
 }
 
@@ -510,7 +540,7 @@ export function streamVersion(sessionId: string, db: Db = getDb()): string | nul
       `SELECT
          (SELECT COUNT(*) FROM messages WHERE session_id = ?)                          AS messages,
          (SELECT COALESCE(MAX(entry_index), -1) FROM messages WHERE session_id = ?)    AS message_index,
-         (SELECT COALESCE(SUM(LENGTH(payload)), 0) FROM messages WHERE session_id = ?) AS message_bytes,
+         (SELECT COALESCE(SUM(LENGTH(payload_summary)), 0) FROM messages WHERE session_id = ?) AS message_bytes,
          (SELECT COUNT(*) FROM events WHERE session_id = ?)                            AS events,
          (SELECT COALESCE(MAX(id), 0) FROM events WHERE session_id = ?)                AS event_id,
          (SELECT COUNT(*) FROM turns WHERE session_id = ?)                             AS turns,
@@ -579,17 +609,38 @@ export function streamVersion(sessionId: string, db: Db = getDb()): string | nul
   ].join("|");
 }
 
-export function sessionStreamData(sessionId: string, db: Db = getDb()): SessionStreamData | null {
+/**
+ * 取一个会话的时间线数据。
+ *
+ * `live` 模式只取最近的一段（最近的消息 / Turn / 事件 / 工具 / 请求），
+ * 客户端与已有数据合并后使用：实时刷新不必把整段历史重发一遍。
+ * 长会话里这一段就是几百 KB 对 1 MB 的差别。
+ */
+/** 实时刷新时每次带多少条（够覆盖一屏 Turn 还要有余量）。 */
+export const LIVE_WINDOW = {
+  messages: 300,
+  turns: 80,
+  events: 200,
+  tools: 120,
+  requests: 80,
+} as const;
+
+export function sessionStreamData(
+  sessionId: string,
+  db: Db = getDb(),
+  options: { live?: boolean } = {},
+): SessionStreamData | null {
   const session = getSession(sessionId, db);
   if (session === null) return null;
 
+  const live = options.live === true;
   return {
     session,
-    messages: listTimelineMessages(sessionId, 20000, db),
-    turns: listTurns(sessionId, 5000, db),
-    events: listEvents(sessionId, { limit: 2000, order: "desc" }, db),
-    tools: listToolCallIndex(sessionId, 5000, db),
-    requests: listRequests(sessionId, 2000, db),
+    messages: listTimelineMessages(sessionId, live ? LIVE_WINDOW.messages : 20000, db, { recent: live }),
+    turns: listTurns(sessionId, live ? LIVE_WINDOW.turns : 5000, db, { recent: live }),
+    events: listEvents(sessionId, { limit: live ? LIVE_WINDOW.events : 2000, order: "desc" }, db),
+    tools: listToolCallIndex(sessionId, live ? LIVE_WINDOW.tools : 5000, db, { recent: live }),
+    requests: listRequests(sessionId, live ? LIVE_WINDOW.requests : 2000, db),
     totals: {
       messages: countMessages(sessionId, db),
       turns: countTurns(sessionId, db),

@@ -108,7 +108,7 @@ function eventOf(sessionId: string, layer: EventLayer, eventType: string): Inges
     session_id: sessionId,
     layer,
     event_type: eventType,
-    payload: {},
+    payload_path: null,
     occurred_at: T(1),
     run_seq: 1,
     turn_index: 0,
@@ -161,6 +161,7 @@ test("对账：读文件、补条目、记 last_reconciled_at，live 变 merged"
       probe_version: "0.1.0",
       dropped_count: 0,
       queue_depth: 0,
+      payload_root: null,
       records: [liveSessionRecord(f.path)],
     }, f.db);
 
@@ -210,6 +211,7 @@ test("对账：只补新增的条目（一遍跑完文件又长了一条）", ()
       probe_version: "0.1.0",
       dropped_count: 0,
       queue_depth: 0,
+      payload_root: null,
       records: [liveSessionRecord(f.path)],
     }, f.db);
     reconcileSession("s1", f.ctx);
@@ -248,6 +250,7 @@ test("对账：没有会话文件时如实返回 found=false，不写核对时�
       probe_version: "0.1.0",
       dropped_count: 0,
       queue_depth: 0,
+      payload_root: null,
       records: [{ ...(liveSessionRecord(f.path) as Extract<IngestRecord, { kind: "session" }>), session_id: "没有文件", file_path: null }],
     }, f.db);
 
@@ -273,6 +276,7 @@ test("ingest 之后：关闭的会话标 ended，跑完与关闭的都安排对�
         probe_version: "0.1.0",
         dropped_count: 0,
         queue_depth: 0,
+        payload_root: null,
         records: [
           liveSessionRecord(f.path),
           { ...(liveSessionRecord(f.path) as Extract<IngestRecord, { kind: "session" }>), session_id: "s2", file_path: null },
@@ -324,6 +328,7 @@ test("状态推进：session_shutdown 把会话标成 ended，幂等且不影响
       probe_version: "0.1.0",
       dropped_count: 0,
       queue_depth: 0,
+      payload_root: null,
       records: [liveSessionRecord(f.path)],
     }, f.db);
 

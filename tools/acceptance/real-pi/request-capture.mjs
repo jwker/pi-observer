@@ -12,7 +12,7 @@
  * 用法：node tools/acceptance/real-pi/request-capture.mjs
  */
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 import {
@@ -30,6 +30,8 @@ const dataDir = makeTempDir("pi-observer-request-");
 const sessionsDir = join(dataDir, "sessions");
 mkdirSync(sessionsDir, { recursive: true });
 const tokenPath = join(dataDir, "token");
+/** 探针与服务端共用的正文目录（探针按令牌文件位置推导） */
+const payloadsDir = join(dataDir, "payloads");
 const port = await freePort();
 
 console.log(`隔离实例：端口 ${port}｜数据 ${dataDir}`);
@@ -78,11 +80,11 @@ async function runPi(args, label) {
   } catch {
     fresh = "";
   }
-  const logged = [...fresh.matchAll(/请求 #(\d+)：原始 (\d+) 字节，脱敏 (\d+) 处，存 (\d+) 字节/g)].map((match) => ({
+  // 探针 v4 的日志格式：请求 #N：X 字节，已写入 <相对路径>
+  const logged = [...fresh.matchAll(/请求 #(\d+)：(\d+) 字节，已写入 (\S+)/g)].map((match) => ({
     seq: Number(match[1]),
     originalBytes: Number(match[2]),
-    redacted: Number(match[3]),
-    storedBytes: Number(match[4]),
+    path: match[3],
   }));
   if (logged.length === 0) {
     console.error(`探针没有记下请求摘要。日志尾部：\n${fresh.slice(-500)}`);
@@ -210,13 +212,23 @@ try {
     if (Number(row.payload_bytes) !== printed.originalBytes) {
       problems.push(`请求 #${printed.seq} 的 payload_bytes ${row.payload_bytes} 与打印的原始长度 ${printed.originalBytes} 不一致`);
     }
+    // 正文在文件里：路径要对得上，文件要存在，字节数要对得上
+    if (row.payload_path !== printed.path) {
+      problems.push(`请求 #${printed.seq} 的正文路径 ${row.payload_path} 与探针写的 ${printed.path} 不一致`);
+    }
+    const file = join(payloadsDir, printed.path);
+    if (!existsSync(file)) {
+      problems.push(`请求 #${printed.seq} 的正文文件不存在：${file}`);
+    } else if (statSync(file).size !== printed.originalBytes) {
+      problems.push(`请求 #${printed.seq} 的正文文件 ${statSync(file).size} 字节，与记录的 ${printed.originalBytes} 不一致`);
+    }
   }
 
-  // 脱敏：这次提示词与响应头里没有真实凭据，检查结构里没有出现常见的敏感键
+  // v4：记录里只带路径，正文内容不该再出现在批次里
   for (const row of rows) {
-    const payload = JSON.parse(row.payload);
-    const text = JSON.stringify(payload);
-    if (text.includes("Bearer sk-")) problems.push(`请求 #${row.request_seq} 的 payload 里出现未脱敏的 Bearer 值`);
+    if (row.payload !== undefined && row.payload !== null) {
+      problems.push(`请求 #${row.request_seq} 的记录里还有正文内容，v4 只该带路径`);
+    }
   }
 
   if (problems.length > 0) {

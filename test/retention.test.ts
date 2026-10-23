@@ -1,9 +1,9 @@
 /**
- * R4：保留期清理与过期状态自愈。
+ * R4：过期状态自愈。
  *
- * 两件事都是「如实反映事实」而不是猜测：
- *   - 文件还在但超过 7 天 → payload 清空、事件删除，元信息留着；
- *   - 文件已经不在 → 会话不可能还在跑，状态改成「已结束」。
+ * 「如实反映事实」而不是猜测：文件已经不在 → 会话不可能还在跑，状态改成「已结束」。
+ *
+ * 保留期清理已经取消（正文改成存文件之后不再按天清），这里保留一条测试钉住这个行为。
  */
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -39,82 +39,46 @@ function seedSession(db: Db, id: string, filePath: string | null, state = "activ
   ).run(id, filePath, state, NEW, NEW);
 }
 
-test("保留期：过期条目的 payload 被清空，行与元信息留着", () => {
+test("不再自动清理：过期的条目、事件与请求都留着", () => {
   const f = fixture();
   try {
     f.db
       .prepare(
-        `INSERT INTO messages (session_id, entry_id, parent_id, kind, role, timestamp, entry_index, text, payload)
+        `INSERT INTO messages (session_id, entry_id, parent_id, kind, role, timestamp, entry_index, text, payload_summary)
          VALUES ('s1', 'old', NULL, 'message', 'user', ?, 1, '旧消息', '{"a":1}')`,
       )
       .run(OLD);
     f.db
       .prepare(
-        `INSERT INTO messages (session_id, entry_id, parent_id, kind, role, timestamp, entry_index, text, payload)
-         VALUES ('s1', 'new', NULL, 'message', 'user', ?, 2, '新消息', '{"a":2}')`,
+        `INSERT INTO events (event_id, session_id, layer, event_type, payload_summary, occurred_at, received_at)
+         VALUES (?, 's1', 'agent', 'agent_settled', '{}', ?, ?)`,
       )
-      .run(NEW);
-
-    const outcome = applyRetention(f.db, NOW);
-    assert.equal(outcome.messages, 1, "只清空过期的那一条");
-
-    const rows = f.db.prepare("SELECT entry_id, text, payload FROM messages ORDER BY entry_index").all();
-    assert.equal(rows.length, 2, "行不会被删");
-    assert.equal(rows[0].payload, '{"deleted":true}', "过期条目的 payload 被清空");
-    assert.equal(rows[0].text, "旧消息", "摘要留着");
-    assert.equal(rows[1].payload, '{"a":2}', "没过期的不动");
-  } finally {
-    f.cleanup();
-  }
-});
-
-test("保留期：过期事件整行删除，没过期的留着", () => {
-  const f = fixture();
-  try {
-    const insert = f.db.prepare(
-      `INSERT INTO events (event_id, session_id, layer, event_type, payload, occurred_at, received_at)
-       VALUES (?, 's1', 'agent', 'agent_settled', '{}', ?, ?)`,
-    );
-    insert.run("e-old", OLD, OLD);
-    insert.run("e-new", NEW, NEW);
-
-    const outcome = applyRetention(f.db, NOW);
-    assert.equal(outcome.events, 1, "只删过期的那一条");
-    const ids = f.db.prepare("SELECT event_id FROM events").all().map((row) => row.event_id);
-    assert.deepEqual(ids, ["e-new"]);
-  } finally {
-    f.cleanup();
-  }
-});
-
-test("保留期：过期请求的 payload 与响应头被清空，序号与状态留着", () => {
-  const f = fixture();
-  try {
+      .run("e-old", OLD, OLD);
     f.db
       .prepare(
-        `INSERT INTO llm_requests (session_id, request_seq, provider, api, model, payload, payload_bytes,
-                                  payload_truncated, status, response_headers, correlation, created_at)
-         VALUES ('s1', 1, 'p', 'a', 'm', '{"x":1}', 100, 0, 200, '{"h":1}', 'serial_assumed', ?)`,
+        `INSERT INTO llm_requests (session_id, request_seq, provider, api, model, payload_path, payload_bytes,
+                                  status, response_headers, correlation, created_at)
+         VALUES ('s1', 1, 'p', 'a', 'm', 'request/s1/1.json', 100, 200, '{"h":1}', 'serial_assumed', ?)`,
       )
       .run(OLD);
 
     const outcome = applyRetention(f.db, NOW);
-    assert.equal(outcome.requests, 1);
+    assert.equal(outcome.messages, 0, "不再清空条目正文");
+    assert.equal(outcome.events, 0, "不再删除事件");
+    assert.equal(outcome.requests, 0, "不再清空请求体");
+    assert.equal(outcome.cutoff, null);
 
-    const row = f.db.prepare("SELECT * FROM llm_requests WHERE request_seq = 1").get() as {
-      payload: string;
-      response_headers: string;
-      status: number;
-      model: string;
-    };
-    assert.equal(row.payload, '{"deleted":true}', "请求体被清空");
-    assert.equal(row.response_headers, '{"deleted":true}', "响应头被清空");
-    assert.equal(row.status, 200, "状态码留着");
-    assert.equal(row.model, "m", "模型留着");
+    assert.equal(count(f.db, "messages"), 1, "条目留着");
+    assert.equal(count(f.db, "events"), 1, "事件留着");
+    assert.equal(count(f.db, "llm_requests"), 1, "请求留着");
   } finally {
     f.cleanup();
   }
 });
+
+function count(db: Db, table: string): number {
+  return (db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n;
+}
 
 test("状态自愈：文件已不存在且仍标着 active 的会话改成 ended", () => {
   const f = fixture();

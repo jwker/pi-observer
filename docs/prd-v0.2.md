@@ -37,12 +37,12 @@
 | C2 | 不显示流式正文：正文只在会话文件里，生成中显示「生成中」 |
 | C3 | 看板自有库用 `node:sqlite` |
 | C4 | 不做会话删除、隐藏、重命名等写操作 |
-| C5 | payload 存脱敏后的全文（方案 A） |
-| C6 | payload 与事件只保留 7 天，到期自动清理，不设总量上限 |
+| C5 | 正文存文件（`data/payloads/`），数据库只留元信息、相对路径与截短骨架；**不脱敏、不截断** |
+| C6 | 不自动删数据：没有保留期，容量由使用者自己控制（设置页能看到占用） |
 | C7 | 代码与文档纳入 git 版本控制 |
 | C8 | 应用形态 Next.js 16（App Router / Node Runtime）；`prototype/` 是设计产物，不作为产品代码 |
 | C9 | 看板是单页：`/` 左侧项目 / 会话，右侧时间线；请求与工具详情用弹窗 |
-| C10 | 内容在库里只有一份（`messages.payload`），不存第二份副本 |
+| C10 | 正文只有一份：完整正文在 `data/payloads/`，库里只留路径与截短骨架 |
 
 ---
 
@@ -126,7 +126,7 @@ Pi 的数据分散在两处，且没有统一界面：
 | 会话、分支、消息全文 | 会话 JSONL | ✅ | 真相源；**唯一的内容副本** |
 | token、成本、模型、provider、耗时、响应 ID | 会话 JSONL 的 assistant message | ✅ | 含 `usage.cost` 明细 |
 | 生命周期事件 | 扩展事件 | ✅ | 实时；只补文件里没有的信息 |
-| 请求 payload | `before_provider_request` | ✅ | 需脱敏与体积上限 |
+| 请求 payload | `before_provider_request` | ✅ | 原样写成文件；不脱敏、不截断 |
 | 响应状态码与 headers | `after_provider_response` | ✅ | 不含响应 body |
 | 响应正文 | 会话 JSONL 的 assistant message | ✅ | 不走事件；文件是唯一来源 |
 | Durable 检查点 | — | ❌ | 本机不存在该运行时 |
@@ -348,10 +348,10 @@ Pi 的数据分散在两处，且没有统一界面：
 | `PI_OBSERVER_BATCH_SIZE` | `50` | 队列达到多少条立即推送 |
 | `PI_OBSERVER_MAX_BATCH_RECORDS` | `200` | 单批最多条数 |
 | `PI_OBSERVER_MAX_BATCH_BYTES` | `1572864` | 单批最多字节（服务端上限 2 MB，留余量） |
-| `PI_OBSERVER_MAX_RECORD_BYTES` | `524288` | 单条记录上限（512 KB） |
+| `PI_OBSERVER_PAYLOAD_DIR` | `<令牌文件所在目录>/payloads` | 正文文件根目录；必须与服务端的数据目录一致 |
 | `PI_OBSERVER_MAX_QUEUE_RECORDS` | `2000` | 队列条数上限 |
 | `PI_OBSERVER_MAX_QUEUE_BYTES` | `67108864` | 队列字节上限 |
-| `PI_OBSERVER_DEBUG_REQUESTS` | `0` | 每次模型请求往日志写一行采集摘要（原始长度 / 脱敏数 / 存储长度 / 是否截断），默认关闭 |
+| `PI_OBSERVER_DEBUG_REQUESTS` | `0` | 每次模型请求往日志写一行采集摘要（字节数与写入的路径），默认关闭 |
 | `PI_OBSERVER_DEBUG` | `0` | 同时把探针日志打到 stderr；默认只写 `data/probe.log` |
 
 ---
@@ -451,12 +451,11 @@ Pi 的数据分散在两处，且没有统一界面：
 | `id` | INTEGER PK | |
 | `session_id` | TEXT | |
 | `request_seq` | INTEGER | 会话内自增 |
-| `provider` / `api` / `model` | TEXT | 优先取 `ctx.model`（provider / api / id），`payload.model` 兜底 |
-| `payload` | TEXT | 脱敏后的 JSON；7 天后清空为 `{"deleted":true}` |
-| `payload_bytes` | INTEGER | 原始大小 |
-| `payload_truncated` | INTEGER | 是否截断 |
+| `provider` / `api` / `model` | TEXT | 优先取 `ctx.model`（provider / api / id），请求体里的 `model` 兜底 |
+| `payload_path` | TEXT | 完整请求体的相对路径（`request/<会话>/<序号>.json`）；正文不落库 |
+| `payload_bytes` | INTEGER | 正文原始字节数 |
 | `status` | INTEGER NULL | 响应状态 |
-| `response_headers` | TEXT NULL | 脱敏后的 headers |
+| `response_headers` | TEXT NULL | 响应头（体积小，留在库里） |
 | `correlation` | TEXT | `serial_assumed` |
 | `created_at` | TEXT | 请求开始时间 |
 | `run_seq` | INTEGER NULL | 请求发生时所在的运行（M3-3 起写入；旧行为 NULL） |
@@ -464,11 +463,11 @@ Pi 的数据分散在两处，且没有统一界面：
 
 约束：`UNIQUE(session_id, request_seq)`。
 
-三条落地约定（M3）：
+三条落地约定（M3 → M4）：
 
-- `payload_bytes` 是**脱敏前**原始 payload 的序列化字节数；`payload` 超过 512 KB 时存合法 JSON 标记 `{"truncated":true,"bytes":N,"original_bytes":N,"head":"前 4 KB"}`，`payload_truncated` 为 1。
+- 正文**不落库也不截断**：探针把完整请求体写成文件（`data/payloads/request/<会话>/<序号>.json`），批次里只带相对路径与原始字节数。文件是**原样的**（不脱敏），权限 0600、目录 0700。
 - `request_seq` 与 `run_seq` 由探针按会话维护，游标写在 `<repo>/data/session-cursor/<会话哈希>.json`；Pi 进程退出后用 `--resume` 打开同一会话时接着上次的序号，不会从 1 重置覆盖旧记录或旧运行。本地游标缺失时（第一次跑新版本、换了数据目录），探针从 `GET /api/sessions/:id/cursor` 取库里已用到的最大序号种子化。
-- 请求开始时写 payload（状态码为空），`after_provider_response` 到达时用同一 `(session_id, request_seq)` 补 `status` / `response_headers`；更新记录不带 payload 字段，服务端不会用空值覆盖。按顺序关联（`correlation = serial_assumed`）。
+- 请求开始时写正文路径（状态码为空），`after_provider_response` 到达时用同一 `(session_id, request_seq)` 补 `status` / `response_headers`；更新记录不带路径字段，服务端不会用空值覆盖。按顺序关联（`correlation = serial_assumed`）。
 
 **events**（时间线）
 
@@ -479,7 +478,8 @@ Pi 的数据分散在两处，且没有统一界面：
 | `session_id` | TEXT | |
 | `layer` | TEXT | `session` / `agent` / `tool` / `provider` |
 | `event_type` | TEXT | 事件名 |
-| `payload` | TEXT | 原始事件 JSON |
+| `payload_path` | TEXT | 完整事件正文的相对路径；正文不落库 |
+| `payload_summary` | TEXT | 截短后的骨架（长字符串截到 200 字符、数组截到 50 项），时间线取标签用 |
 | `occurred_at` | TEXT NULL | 事件自带时间 |
 | `received_at` | TEXT | 服务端接收时间 |
 
@@ -506,7 +506,8 @@ Pi 的数据分散在两处，且没有统一界面：
 | `timestamp` | TEXT NULL | 条目自带时间 |
 | `entry_index` | INTEGER | 条目在文件里的行号（同一秒的条目靠它排序） |
 | `text` | TEXT NULL | 可读摘要：`message` 是正文，其他类型是一行说明；截到 2 KB |
-| `payload` | TEXT NULL | 原始条目 JSON；超过上限截断为 `{"truncated":true,"bytes":N}` |
+| `payload_path` | TEXT NULL | 完整条目 JSON 的相对路径（`message/<会话>/<条目>.json`）；正文不落库 |
+| `payload_summary` | TEXT NULL | 截短后的骨架（长字符串截到 200 字符、数组截到 50 项）；工具参数与结果从这里 join 出来 |
 
 约束：`UNIQUE(session_id, entry_id)`。
 
@@ -558,22 +559,22 @@ CREATE INDEX idx_messages_kind       ON messages(session_id, kind);
 CREATE INDEX idx_jsonl_files_session ON jsonl_files(session_id);
 ```
 
-### 8.6 保留与清理
+### 8.6 空间与清理
 
-| 数据 | 保留 | 到期处理 |
-|:--|:--|:--|
-| `llm_requests.payload` / `response_headers` | 7 天 | 清空为 `{"deleted":true}`；行、模型、字节数、状态码等统计字段保留 |
-| `events.payload` | 7 天 | 删除整行（该表只用于时间线） |
-| `sessions` / `runs` / `turns` / `tool_calls` / `messages` | 长期 | 随会话删除而删除 |
-| `jsonl_files` | 长期 | 只是读取进度（一行几十字节）；指向的文件被删掉后可清掉对应行 |
+**不自动删数据**（2026-10-23 决定，取代原来的 7 天保留期）：
 
-执行方式：
+| 数据 | 处理 |
+|:--|:--|
+| `data/payloads/` 里的正文文件 | 不自动删。容量由使用者自己控制：设置页能看到占用，变大了自己导出或删对应会话的目录 |
+| `sessions` / `runs` / `turns` / `tool_calls` / `messages` / `events` / `llm_requests` | 不自动删 |
+| `jsonl_files` | 不清理（读取进度，一行几十字节） |
 
-- 服务启动时执行一次，之后每小时一次。
-- 判断依据：`llm_requests.created_at`、`events.received_at`。
-- 只做时间判断，不设总量上限（已确认）。
+理由：自动删除会让人以为数据还在，其实早就没了。改成「看得见占用、由人决定删不删」。
+
+唯一还自动做的是**空间回收**：
+
 - 每天执行一次 `VACUUM`，回收删除留下的空间；**`VACUUM` 之后必须跟一次 `PRAGMA wal_checkpoint(TRUNCATE)`**，否则 WAL 占用的磁盘不释放（实测：155 MB 的库只 `VACUUM` 后主库仍是 155 MB，补 checkpoint 后才归零）。
-- 清理只删除看板库中的副本，不动 `~/.pi/agent/sessions/` 下的原始会话文件。
+- 回收只动看板自己的库与正文目录，不动 `~/.pi/agent/sessions/` 下的原始会话文件。
 
 ---
 
@@ -688,7 +689,7 @@ SSE 事件类型：`session.updated`、`probe.status`。每条只带最小标识
 
 **行详情弹窗**：三个标签页。
 
-1. **内容**：文件行给正文、思考、工具参数与结果；请求行给概览（序号 / provider / api / model / payload 字节 / 响应状态 / token）、脱敏后的请求体与响应头；钩子事件给钩子入参。
+1. **内容**：文件行给正文、思考、工具参数与结果；请求行给概览（序号 / provider / api / model / payload 字节 / 响应状态 / token），弹窗里给出完整请求体与响应头；钩子事件给钩子入参。
 2. **原始 JSON**：这一行对应的完整载荷。
 3. **关联**：这一行挂着的钩子事件、工具与请求。
 
@@ -738,7 +739,7 @@ pi --extension /absolute/path/to/pi-observer/ext
 
 | 风险 | 处理 |
 |:--|:--|
-| 请求 payload 含系统提示与全部历史 | 默认脱敏；界面默认折叠，需点击展开 |
+| 请求 payload 含系统提示与全部历史 | 原样存在 `data/payloads/`（权限 0600）；界面默认折叠，需点击展开 |
 | payload 含 `authorization`、`x-api-key` 等 | 按键名黑名单剔除；`before_provider_headers` 不订阅，从源头避免采集 headers |
 | payload 体积大 | 单条 512 KB 上限，超出截断并标注；整条记录 7 天后清空正文 |
 | 任意网页向本机接口写数据 | `/api/ingest` 要求令牌；读取接口只读且无副作用 |
@@ -771,16 +772,16 @@ pi --extension /absolute/path/to/pi-observer/ext
 
 ### M3 请求与用量
 
-内容：`before_provider_request` / `after_provider_response` 接入、脱敏、请求与工具的取数、token 与成本汇总。
+内容：`before_provider_request` / `after_provider_response` 接入、请求正文落文件、请求与工具的取数、token 与成本汇总。
 
 验收：
 
 - 每次 `before_provider_request` 恰好 1 条记录；应用层再次发起的新请求（新 turn / 重发）会产生新序号，不覆盖旧记录。
   Pi 内部的 HTTP 重试发生在一次 before / after 之间，探针看不到每次尝试，只记一条（状态码取最终响应）；重试次数不可得。
-- 记录中不含 `authorization` 或 API key。
-- 记录的 `payload_bytes` 与触发时打印的原始长度一致；超过上限时 `payload_truncated` 为 1。
+- 记录里只有正文路径与字节数，完整请求体在正文文件里；`payload_bytes` 与触发时打印的原始长度一致。
+- 正文文件权限 0600、目录 0700（原样保存，不脱敏）。
 - 状态码与响应头可见。
-- 时间线里请求与响应各占一行（`provider →` / `provider ←`）；行详情弹窗显示脱敏 payload、响应头、usage（含缓存读写）与关联的 run / Turn。
+- 时间线里请求与响应各占一行（`provider →` / `provider ←`）；行详情弹窗显示完整请求体、响应头、usage（含缓存读写）与关联的 run / Turn，并能「对比上一条」请求的逐行差异。
 - 时间线里工具单独成行，显示工具名、参数预览、耗时与成功 / 失败；行详情弹窗显示完整参数、最终结果，并关联到助手条目与结果条目。
 - 会话顶部显示输入 / 输出 token、缓存读取 / 写入与成本；时间线 Turn 头显示同一 Turn 的 token 与成本；与 JSONL 中 assistant 消息的 `usage` 求和一致。
 
@@ -819,7 +820,7 @@ pi --extension /absolute/path/to/pi-observer/ext
 | 请求与响应无共享 ID | 并发时可能错配 | 目前假设串行：同一时间只保留一个待响应请求，新的 `before_provider_request` 会放弃未响应的旧请求；界面标注 `serial_assumed` |
 | JSONL 整文件重写 | 读取位置失效 | 大小变小即重读；用条目 ID 去重 |
 | 同一条目 id 出现在两个会话文件里 | `turns`（`message_entry_id`）与 `tool_calls`（`tool_call_id`）的持久键是全局唯一，回填后到的那份会写到先到的那一行 | 实测 Pi 的 `newSession`（fork / clone，`parentSession` 记录血缘）只写一个新的 `session` 头部、不复制条目 id（`session-manager.js` 已核），所以正常路径不会发生；手工复制会话文件属于已知边界 |
-| payload 体积与敏感内容 | 存储膨胀、泄露风险 | 脱敏 + 单条 512 KB 截断 + 7 天到期清空；不设总量上限，磁盘占用按周衡量 |
+| 正文体积与敏感内容 | 存储膨胀、泄露风险 | 正文存文件（目录 0700 / 文件 0600），不落库、不脱敏、不截断；**不自动清理**，占用在设置页可见，由使用者自己决定删不删 |
 | Node 版本过低 | `node:sqlite` 不可用 | 启动时检查版本并给出明确错误 |
 | Pi 升级导致事件契约变化 | 探针失效 | 记录所适配的 Pi 版本；升级后跑一遍 M1 验收 |
 | 多会话并发 | 事件交错、页面混乱 | 按会话分组；默认只展示最近活跃的若干会话 |

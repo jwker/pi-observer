@@ -19,6 +19,8 @@ export async function register(): Promise<void> {
     { endSessionsWithoutFile },
     { getDb },
     { applyRetention, startRetentionJobs },
+    { config },
+    { payloadsRoot, tightenPayloadPermissions },
   ] = await Promise.all([
     import("./lib/backfill.ts"),
     import("./lib/log.ts"),
@@ -26,6 +28,8 @@ export async function register(): Promise<void> {
     import("./lib/session-state.ts"),
     import("./lib/db.ts"),
     import("./lib/retention.ts"),
+    import("./lib/config.ts"),
+    import("./lib/payload-files.ts"),
   ]);
 
   try {
@@ -63,6 +67,17 @@ export async function register(): Promise<void> {
     startRetentionJobs(getDb());
   } catch (error) {
     log("warn", "retention", "保留期清理失败", { error: (error as Error).message });
+  }
+
+  // 正文是原样请求体（含系统提示与全部对话历史），不脱敏也不自动清理：
+  // 收紧权限，旧的 0644 文件也一并改掉。
+  try {
+    const changed = tightenPayloadPermissions(payloadsRoot(config().dataDir));
+    if (changed > 0) {
+      log("info", "storage", "已收紧正文文件权限", { files: changed });
+    }
+  } catch (error) {
+    log("warn", "storage", "收紧正文文件权限失败", { error: (error as Error).message });
   }
 
   // 启动扫描之后开始每秒跟进活跃会话；已有循环时是幂等的。

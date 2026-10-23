@@ -1,5 +1,7 @@
 "use client";
 
+import { useLayoutEffect, useRef } from "react";
+
 import { clockTime, formatBytes, formatCost, formatDuration, formatTokens } from "@/lib/format.ts";
 import { CATEGORY_LABELS, type TimelineFilters } from "@/lib/filters.ts";
 import type { SessionStream, StreamCategory, StreamRow, TurnWindow } from "@/lib/stream.ts";
@@ -25,6 +27,8 @@ interface SessionTimelineProps {
   onToggleTurn: (key: string) => void;
   onExpandAll: () => void;
   onLoadEarlier: () => void;
+  /** 鼠标进出时间线时上报，用来暂停实时刷新 */
+  onInteractChange?: (interacting: boolean) => void;
   onRefresh: () => void;
   onDetail: (row: StreamRow) => void;
 }
@@ -47,7 +51,67 @@ export function SessionTimeline({
   onLoadEarlier,
   onRefresh,
   onDetail,
+  onInteractChange,
 }: SessionTimelineProps) {
+  // 滚动锚定：新事件到达时，新行会插到时间线上方，整屏内容往下跳，看着像页面在闪。
+  //
+  // 做法：记住「视口顶部那一行」是哪个 key、它离滚动区顶部多远；下次数据变了，
+  // 如果这一行被顶下去了，就把滚动位置补回去，眼睛看到的内容不动。
+  //
+  // 只在「上面插了内容」时补。展开 / 折叠 Turn 是在下面加内容，不补——
+  // 否则刚展开的内容会被推出视口（这正是之前那版的问题）。
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const anchorRef = useRef<{ key: string; offset: number } | null>(null);
+
+  /** 某一行在滚动内容里的位置（与滚动位置无关，只看内容坐标） */
+  const offsetOf = (element: HTMLElement): number => {
+    const container = scrollRef.current;
+    if (container === null) return 0;
+    return (
+      element.getBoundingClientRect().top -
+      container.getBoundingClientRect().top +
+      container.scrollTop
+    );
+  };
+
+  /** 视口顶部那一行：第一个底边还在视口里的行 */
+  const measureAnchor = (): void => {
+    const container = scrollRef.current;
+    if (container === null) return;
+    const containerTop = container.getBoundingClientRect().top;
+    const rows = container.querySelectorAll<HTMLElement>("[data-row-key]");
+    for (const element of rows) {
+      if (element.getBoundingClientRect().bottom > containerTop) {
+        const key = element.dataset.rowKey;
+        if (key !== undefined) anchorRef.current = { key, offset: offsetOf(element) };
+        return;
+      }
+    }
+    anchorRef.current = null;
+  };
+
+  // 补偿必须排在测量之前：同一轮渲染里，补偿用的还是上一次量到的位置。
+  useLayoutEffect(() => {
+    const container = scrollRef.current;
+    const anchor = anchorRef.current;
+    if (container === null || anchor === null) return;
+    const element = container.querySelector<HTMLElement>(
+      `[data-row-key="${CSS.escape(anchor.key)}"]`,
+    );
+    if (element === null) return;
+    const delta = offsetOf(element) - anchor.offset;
+    if (delta !== 0) container.scrollTop += delta;
+    // 依赖数据本身：只有数据变了（新事件到达）才补偿，展开 Turn 不算。
+  }, [stream, turnWindow]);
+
+  // 每次渲染后重新量一次锚点；用户滚动时也更新，锚点始终是视口顶部那一行
+  useLayoutEffect(() => {
+    measureAnchor();
+  });
+  const handleScroll = (): void => {
+    measureAnchor();
+  };
+
   const state = displayState(session);
   const stateLabel =
     state === "active" ? "进行中" : state === "idle" ? "空闲" : state === "ended" ? "已结束" : "状态未知";
@@ -169,7 +233,13 @@ export function SessionTimeline({
         </div>
       </div>
 
-      <div className="tl-scroll">
+      <div
+        className="tl-scroll"
+        ref={scrollRef}
+        onScroll={handleScroll}
+        onPointerEnter={() => onInteractChange?.(true)}
+        onPointerLeave={() => onInteractChange?.(false)}
+      >
         <div className="tl">
           {error !== null ? (
             <div className="notice err tl-note">
@@ -342,7 +412,7 @@ function TimelineRow({
     row.entryId !== null || row.toolCallId !== null || row.requestSeq !== null || row.eventId !== null;
 
   return (
-    <div className={kind.className}>
+    <div className={kind.className} data-row-key={row.key}>
       {hasDetail ? (
         <button className="more" onClick={() => onDetail(row)} title="详情" aria-label="详情">
           more

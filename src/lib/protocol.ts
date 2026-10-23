@@ -5,15 +5,15 @@
  * 本文件必须保持「零依赖、纯类型与常量」，不 import 任何 node: 内置模块或框架，
  * 因为它同时会被 jiti（Pi 内）与 Next（构建期）加载。
  *
- * v3 起内容只有一条路径：会话文件 → `messages.payload`。事件只补文件里没有的操作信息，
- * `turns` / `tool_calls` 只留标量、时间与指向 `messages` 的引用，不再复制正文。
+ * v4 起正文不再随记录传输：探针把正文写成文件，批次里只带相对路径与字节数，
+ * 服务端按同一套路径解析（见 `src/lib/payload-files.ts`）。
  */
 
 /** 协议版本；探针与服务不一致时服务端拒绝整批（见 ingest.ts） */
-export const PROBE_PROTOCOL_VERSION = 3;
+export const PROBE_PROTOCOL_VERSION = 4;
 
 /** 探针在会话开始时上报自己的版本，便于在看板上判断探针是否过期 */
-export const PROBE_VERSION = "0.3.0";
+export const PROBE_VERSION = "0.4.0";
 
 export type EventLayer = "session" | "agent" | "tool" | "provider";
 
@@ -58,7 +58,8 @@ export interface EventRecord {
   session_id: string;
   layer: EventLayer;
   event_type: string;
-  payload: unknown;
+  /** 正文文件的相对路径；探针写好文件后才有 */
+  payload_path: string | null;
   occurred_at: string | null;
   run_seq: number | null;
   turn_index: number | null;
@@ -97,13 +98,12 @@ export interface RequestRecord {
   provider: string | null;
   api: string | null;
   model: string | null;
-  /** 已脱敏、超限已截断的 payload；响应更新时为 null */
-  payload: unknown;
-  /** 脱敏前原始 payload 的序列化字节数；响应更新时为 null */
+  /** 请求体文件的相对路径；请求开始时写一次，响应更新时为 null */
+  payload_path: string | null;
+  /** 请求体的原始字节数；响应更新时为 null */
   payload_bytes: number | null;
-  payload_truncated: boolean | null;
   status: number | null;
-  /** 已脱敏的响应头；请求开始时为 null */
+  /** 响应头（体积很小，留在库里）；请求开始时为 null */
   response_headers: unknown;
   correlation: "serial_assumed";
   created_at: string;
@@ -153,6 +153,8 @@ export interface IngestBatch {
   probe_version: string;
   dropped_count: number;
   queue_depth: number;
+  /** 探针写正文文件的根目录；与服务端不一致时服务端会记一条警告 */
+  payload_root: string | null;
   records: IngestRecord[];
 }
 

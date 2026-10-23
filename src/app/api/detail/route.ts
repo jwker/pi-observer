@@ -1,4 +1,6 @@
 import { getDb } from "@/lib/db.ts";
+import { config } from "@/lib/config.ts";
+import { payloadsRoot, readPayloadJson } from "@/lib/payload-files.ts";
 import {
   getEventDetail,
   getMessageDetail,
@@ -26,8 +28,8 @@ const KINDS = new Set<RowDetailKind>(["message", "tool", "request", "event"]);
  *   id       entry_id / tool_call_id / request_seq / event_id
  *   related  当前行关联的事件 id（逗号分隔），由时间线行带过来
  *
- * 只返回当前行需要的完整内容：正文与原始 JSON 在这里才从 `messages.payload`
- * 取出来，时间线本身不带这些大字段。
+ * 只返回当前行需要的完整内容：正文与原始 JSON 在这里才从正文文件里取出来，
+ * 时间线本身只带骨架，不带这些大字段。
  */
 export async function GET(req: Request): Promise<Response> {
   const url = new URL(req.url);
@@ -76,9 +78,17 @@ export async function GET(req: Request): Promise<Response> {
     addMessage(tool.result_entry_id);
   };
 
+  const payloadRoot = payloadsRoot(config().dataDir);
+
   if (kind === "message") {
     detail.message = getMessageDetail(sessionId, id, db);
     if (detail.message === null) return notFound();
+    // 正文在文件里，弹窗要看全文就按路径读出来。
+    // 文件不在了就说没有（返回 null），不拿库里那份截短骨架冒充全文。
+    detail.message = {
+      ...detail.message,
+      payload: readPayloadJson(payloadRoot, detail.message.payload_path),
+    };
     // 这个条目里如果有 toolCall，把对应工具调用也带出来，弹窗可显示参数 / 结果
     const rows = db
       .prepare(
@@ -97,9 +107,17 @@ export async function GET(req: Request): Promise<Response> {
     if (!Number.isFinite(requestSeq)) return notFound();
     detail.request = getRequestDetail(sessionId, requestSeq, db);
     if (detail.request === null) return notFound();
+    detail.request = {
+      ...detail.request,
+      payload: readPayloadJson(payloadRoot, detail.request.payload_path),
+    };
   } else {
     detail.event = getEventDetail(sessionId, id, db);
     if (detail.event === null) return notFound();
+    detail.event = {
+      ...detail.event,
+      payload: readPayloadJson(payloadRoot, detail.event.payload_path),
+    };
     const payload = asObject(detail.event.payload);
     const toolCallId = strOf(payload?.toolCallId);
     if (toolCallId !== null) addTool(toolCallId);

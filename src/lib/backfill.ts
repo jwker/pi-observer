@@ -26,7 +26,7 @@ import { join } from "node:path";
 import { config } from "./config.ts";
 import { type Db, getDb, withTx } from "./db.ts";
 import { refreshSessionAggregates } from "./ingest.ts";
-import { serializeCapped } from "./redact.ts";
+import { payloadRelPath, payloadsRoot, summarizePayload, writePayloadFile } from "./payload-files.ts";
 
 /** 会话文件头部（首行的 `session` 条目） */
 export interface SessionHeader {
@@ -380,7 +380,7 @@ export function encodeSessionDirSegment(cwd: string): string {
 //      回填只能给近似值，因此冲突时不覆盖；`sessions.state` 同理。
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** `text` 列只放可读摘要（列表与消息树用），全文在 `payload` 里 */
+/** `text` 列只放可读摘要（列表与消息树用），全文在正文文件里 */
 const TEXT_MAX_BYTES = 2048;
 
 /**
@@ -413,7 +413,8 @@ export interface BackfillContext {
   fs: JournalFs;
   /** 会话文件根目录（PRD §9.1） */
   sessionsDir: string;
-  payloadMaxBytes: number;
+  /** 正文文件根目录（data/payloads） */
+  payloadRoot: string;
   now: () => string;
   /** 每条警告都会回调一次，交给调用方记日志 */
   onWarning?: (message: string) => void;
@@ -427,7 +428,7 @@ export function createBackfillContext(overrides: Partial<BackfillContext> = {}):
     reader: overrides.reader ?? readerFor(fs),
     fs,
     sessionsDir: overrides.sessionsDir ?? cfg.sessionsDir,
-    payloadMaxBytes: overrides.payloadMaxBytes ?? cfg.payloadMaxBytes,
+    payloadRoot: overrides.payloadRoot ?? payloadsRoot(cfg.dataDir),
     now: overrides.now ?? (() => new Date().toISOString()),
     onWarning: overrides.onWarning,
   };
@@ -591,7 +592,6 @@ interface WriteInput {
 function writeEntries(ctx: BackfillContext, input: WriteInput, warn: (message: string) => void): void {
   const { sessionId, entries } = input;
   const db = ctx.db;
-  const maxPayload = ctx.payloadMaxBytes;
 
   const upsertSession = db.prepare(`
     INSERT INTO sessions (
@@ -609,8 +609,9 @@ function writeEntries(ctx: BackfillContext, input: WriteInput, warn: (message: s
   `);
 
   const upsertMessage = db.prepare(`
-    INSERT INTO messages (session_id, entry_id, parent_id, kind, role, timestamp, entry_index, text, payload)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO messages (session_id, entry_id, parent_id, kind, role, timestamp, entry_index, text,
+                          payload_path, payload_summary)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(session_id, entry_id) DO UPDATE SET
       parent_id = COALESCE(excluded.parent_id, messages.parent_id),
       kind = excluded.kind,
@@ -618,7 +619,8 @@ function writeEntries(ctx: BackfillContext, input: WriteInput, warn: (message: s
       timestamp = COALESCE(excluded.timestamp, messages.timestamp),
       entry_index = excluded.entry_index,
       text = COALESCE(excluded.text, messages.text),
-      payload = COALESCE(excluded.payload, messages.payload)
+      payload_path = COALESCE(excluded.payload_path, messages.payload_path),
+      payload_summary = COALESCE(excluded.payload_summary, messages.payload_summary)
   `);
 
   const upsertTurn = db.prepare(`
@@ -692,6 +694,15 @@ function writeEntries(ctx: BackfillContext, input: WriteInput, warn: (message: s
       // 没有 id 的条目（极少数）无法按 id 去重，用行号当键：同一份文件每次都得到同一个键，
       // 所以重复回填仍然幂等，但文件被重写后这些行的身份会变。
       const entryId = entry.entryId ?? `#line:${entry.lineNo}`;
+      // 正文写文件，库里留路径与截短后的骨架
+      const relPath = payloadRelPath("message", sessionId, entryId);
+      let payloadPath: string | null = null;
+      try {
+        writePayloadFile(ctx.payloadRoot, relPath, JSON.stringify(raw));
+        payloadPath = relPath;
+      } catch (error) {
+        warn(`正文写入失败（${relPath}）：${(error as Error).message}`);
+      }
       upsertMessage.run(
         sessionId,
         entryId,
@@ -701,7 +712,8 @@ function writeEntries(ctx: BackfillContext, input: WriteInput, warn: (message: s
         entry.timestamp,
         entry.lineNo,
         facts.text,
-        serializeCapped(raw, maxPayload).json,
+        payloadPath,
+        JSON.stringify(summarizePayload(raw)),
       );
 
       if (kind === "message" && facts.role === "assistant" && isObj(raw.message)) {

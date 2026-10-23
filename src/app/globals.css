@@ -1190,3 +1190,109 @@ html[data-theme="light"] .modal-panel { box-shadow: 0 18px 60px rgba(24, 27, 31,
   .modal { padding: 10px; }
   .modal-meta { grid-template-columns: 1fr; }
 }
+
+/* ==========================================================================
+   存储用量与差异视图
+   ========================================================================== */
+
+.storage-big {
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -.01em;
+  margin: 2px 0 4px;
+}
+
+.storage-num {
+  font-size: 18px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.storage-bar {
+  display: flex;
+  height: 8px;
+  margin-top: 14px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--bg-3);
+}
+
+.storage-bar .db    { background: var(--accent); }
+.storage-bar .files { background: var(--purple); }
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.table td {
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+
+.table tr:last-child td { border-bottom: 0; }
+
+.diff-view {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.diff-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 11px;
+}
+
+.diff-body {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--bg-1);
+}
+
+.diff-rows { display: block; }
+
+.diff-row {
+  display: grid;
+  grid-template-columns: 46px 46px 18px 1fr;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.diff-num {
+  text-align: right;
+  padding: 0 6px;
+  color: var(--fg-3);
+  user-select: none;
+  border-right: 1px solid var(--border);
+}
+
+.diff-mark {
+  text-align: center;
+  color: var(--fg-3);
+  user-select: none;
+}
+
+.diff-text { padding: 0 8px; }
+
+.diff-row.added   { background: var(--ok-bg); }
+.diff-row.added .diff-mark { color: var(--green); }
+.diff-row.removed { background: var(--err-bg); }
+.diff-row.removed .diff-mark { color: var(--red); }
+
+.diff-gap {
+  padding: 3px 10px;
+  font-size: 11px;
+  color: var(--fg-3);
+  background: var(--bg-2);
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}

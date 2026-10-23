@@ -1,15 +1,9 @@
 /**
- * 保留期清理与空间回收（PRD §8.6）。
+ * 空间回收（PRD §8.6）。
  *
- * **保留 7 天**：payload 与事件只留 7 天，到期自动清理，不设总量上限
- * （PRD C6）。会话文件本身不动——Pi 自己决定留多久，看板不替它删。
- *
- * **清什么**：
- *   - `messages.payload` 清空为 `{"deleted":true}`，行留着（条目 id、行号、父子关系
- *     仍有意义，而且删行会让时间线的行号对不上）；
- *   - `events` 整行删除——它只是操作痕迹，7 天后没有参考价值；
- *   - `llm_requests.payload` 与 `response_headers` 同样清空（请求体含系统提示与全部历史，
- *     是最敏感也最占空间的部分）。
+ * **不再自动删数据**：正文改成存文件之后，看板不再按天清 payload / 消息 / 事件。
+ * 容量由使用者自己控制：看板上看到占用变大就手动导出或删除对应会话的正文文件。
+ * 自动删除会让人以为数据还在，其实早就没了——这个坑不值得踩。
  *
  * **空间回收**：`VACUUM` 之后**必须**跟一次 `PRAGMA wal_checkpoint(TRUNCATE)`。
  * 实测（WAL 模式）：只 VACUUM 不 checkpoint，主库文件不会变小，WAL 还会继续涨
@@ -20,84 +14,23 @@ import { type Db, getDb, withTx } from "./db.ts";
 import { log } from "./log.ts";
 
 export interface RetentionOutcome {
-  /** 保留期截止时间（ISO） */
-  cutoff: string;
-  /** 清空 payload 的 messages 行数 */
-  messages: number;
-  /** 删除的 events 行数 */
-  events: number;
-  /** 清空 payload 的请求行数 */
-  requests: number;
+  /** 保留期截止时间（ISO）；不再自动清理，恒为 null */
+  cutoff: null;
+  /** 清空 payload 的 messages 行数；不再清理，恒为 0 */
+  messages: 0;
+  /** 删除的 events 行数；不再清理，恒为 0 */
+  events: 0;
+  /** 清空 payload 的请求行数；不再清理，恒为 0 */
+  requests: 0;
 }
 
 /**
- * 清理超过保留期的数据。
+ * 兼容旧调用点：现在什么都不清。
  *
- * 各表按自己的时间列判断年龄：
- *   - `messages.timestamp`：文件里的时间（回填的条目入库晚但事件发生早，
- *     按入库时间算会刚回填就被清掉）；
- *   - `events.received_at`：入库时间；
- *   - `llm_requests.created_at`：请求发出的时间。
- *
- * `jsonl_files` 不清理：它只是每个会话文件一行的读取进度（一行几十字节），
- * 而且删掉会让下次读同一个文件时从头再来一遍。
+ * 数据要删由人显式决定（看板上导出后手动处理），不由定时任务替人做主。
  */
-export function applyRetention(db: Db, now: Date = new Date()): RetentionOutcome {
-  const days = config().retentionDays;
-  const cutoff = new Date(now.getTime() - days * 24 * 60 * 60 * 1000).toISOString();
-
-  const outcome: RetentionOutcome = {
-    cutoff,
-    messages: 0,
-    events: 0,
-    requests: 0,
-  };
-
-  withTx(db, () => {
-    // 条目：清空 payload，保留行与元信息
-    outcome.messages = Number(
-      db
-        .prepare(
-          `UPDATE messages
-              SET payload = '{"deleted":true}'
-            WHERE payload IS NOT NULL
-              AND payload <> '{"deleted":true}'
-              AND COALESCE(timestamp, '') <> ''
-              AND timestamp < ?`,
-        )
-        .run(cutoff).changes,
-    );
-
-    // 请求：清空请求体与响应头，保留序号、状态码、时间等元信息
-    outcome.requests = Number(
-      db
-        .prepare(
-          `UPDATE llm_requests
-              SET payload = '{"deleted":true}', response_headers = '{"deleted":true}'
-            WHERE created_at < ?
-              AND (
-                (payload IS NOT NULL AND payload <> '{"deleted":true}')
-                OR (response_headers IS NOT NULL AND response_headers <> '{"deleted":true}')
-              )`,
-        )
-        .run(cutoff).changes,
-    );
-
-    // 事件：整行删除
-    outcome.events = Number(
-      db.prepare("DELETE FROM events WHERE received_at < ?").run(cutoff).changes,
-    );
-  });
-
-  log("info", "retention", "保留期清理完成", {
-    cutoff,
-    days,
-    messages: outcome.messages,
-    events: outcome.events,
-    requests: outcome.requests,
-  });
-
-  return outcome;
+export function applyRetention(_db: Db, _now: Date = new Date()): RetentionOutcome {
+  return { cutoff: null, messages: 0, events: 0, requests: 0 };
 }
 
 /**
@@ -151,7 +84,6 @@ export function startRetentionJobs(db: Db = getDb()): void {
       if (state.running) return;
       state.running = true;
       try {
-        applyRetention(db);
         if (Date.now() - state.lastVacuumAt >= cfg.vacuumIntervalMs) {
           state.lastVacuumAt = Date.now();
           reclaimSpace(db);
@@ -165,10 +97,9 @@ export function startRetentionJobs(db: Db = getDb()): void {
   };
   state.timer.unref?.();
   (globalThis as unknown as Record<string, RetentionHandle | undefined>)[GLOBAL_KEY] = state;
-  log("info", "retention", "定期清理已启动", {
+  log("info", "retention", "定期空间回收已启动", {
     interval_ms: cfg.retentionIntervalMs,
     vacuum_interval_ms: cfg.vacuumIntervalMs,
-    days: cfg.retentionDays,
   });
 }
 

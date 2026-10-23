@@ -86,7 +86,7 @@ pi-observer/
       config.ts                 配置与默认值
       db.ts                     打开库、PRAGMA、user_version 迁移（server-only）
       schema.ts                 建表与索引（内联 DDL，不用 .sql 文件）
-      redact.ts                 脱敏黑名单
+      redact.ts                 脱敏黑名单（正文改存文件后已不再用于请求体）
       ingest.ts                 校验 → 事务 → upsert
       backfill.ts               JSONL 解析、重写检测、回填入库
       session-sync.ts           活跃会话每秒跟进文件（server-only）
@@ -101,7 +101,7 @@ pi-observer/
       log.ts                    单行 JSON 日志
   ext/
     index.ts                    探针入口（Pi 直接加载，不参与 Next 构建）
-    request.ts                  请求 payload 脱敏/截断、request_seq 与串行配对（纯逻辑）
+    request.ts                  请求序号、串行配对、正文写成文件（纯逻辑）
     session-cursor.ts           request_seq / run_seq 的跨进程游标（data/session-cursor/）
     logger.ts                   探针日志落点：默认只写 data/probe.log，不打用户终端
   tools/acceptance/             验收脚本（档 A 离线 + 档 B 真实 Pi）
@@ -165,8 +165,9 @@ pi-observer/
 ### 3.4 探针侧（`ext/`）：由 Pi 加载，独立于 Next
 
 - Pi 用 **jiti** 加载扩展（`dist/core/extensions/loader.js`），会做转译，所以严格来说不受 strip-only 限制；`--extension` 指向目录里的 `index.ts` 也受支持（已从源码确认）。
-- 但探针里仍**建议不用 `enum` / `namespace`**，因为探针的纯逻辑（队列、合并、脱敏、请求序号）最容易也最值得用 `node --test` 直接测，而 Node 直跑时 strip-only 限制是真实存在的。
-- 请求 payload 在探针侧先脱敏、再按单条上限截断；服务端收到后再脱敏一次（防御纵深），不假设客户端一定做对。
+- 但探针里仍**建议不用 `enum` / `namespace`**，因为探针的纯逻辑（队列、合并、请求序号、正文写文件）最容易也最值得用 `node --test` 直接测，而 Node 直跑时 strip-only 限制是真实存在的。
+- **正文不进批次**（2026-10-23）：探针把请求体与事件正文写成 `data/payloads/` 下的文件，批次里只带相对路径与字节数。好处是 2.9 MB 的请求体不会撑爆批次上限与内存队列；代价是探针与服务端必须在同一个数据目录（批次里带 `payload_root`，不一致时服务端记一条警告）。
+- 正文**不脱敏、不截断**，文件权限 0600、目录 0700；也不自动清理（占用在设置页可见）。
 - `request_seq` / `run_seq` 写 `data/session-cursor/<会话哈希>.json`，只为跨 Pi 进程续跑时不覆盖旧请求与旧运行；不写 Pi 的会话文件。本地游标缺失时从看板的 `/api/sessions/:id/cursor` 取最大序号种子化。
 - 探针日志写 `data/probe.log`（默认不打 stderr）：探针在用户的 Pi 进程里，打到 stderr 会污染他们自己项目的终端。
 - 探针不进入 Next 的构建范围，`ext/` 不是 `src/` 下的内容。
@@ -290,7 +291,7 @@ SSE 实现要点（已实测，附录 C.3）：
 | 运行器 | `node --test`（内置），断言用 `node:assert/strict` |
 | 文件 | `test/*.test.ts`，无需配置（已实测能直接跑 `.ts`，附录 A.4） |
 | 前提 | 被测模块放在 `src/lib/**`，且相对导入带 `.ts` 后缀（§3.2） |
-| 优先覆盖 | JSONL 5 条解析规则、幂等 upsert（同一 payload 写两次只有一行）、脱敏黑名单、时间线行模型（用户 Turn 分组、当前分支、分页）、轮询版本号判重、筛选存档容错、SSE 帧格式、探针队列溢出与 `dropped_count` |
+| 优先覆盖 | JSONL 5 条解析规则、幂等 upsert（同一 payload 写两次只有一行）、正文文件读写与权限、时间线行模型（用户 Turn 分组、当前分支、分页）、轮询版本号判重、筛选存档容错、SSE 帧格式、探针队列溢出与 `dropped_count` |
 | 类型检查 | `next typegen && tsc --noEmit`（框架自带，不额外引工具） |
 | 覆盖率 | `npm run coverage`（`node --test --experimental-test-coverage`，内置，不引依赖）。只统计被测试 import 的模块，`src/app/**` 与 `src/components/**` 不计入 |
 | 一次跑完 | `npm run check` = 单测 + 类型检查 + 构建 |

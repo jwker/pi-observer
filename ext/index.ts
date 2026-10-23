@@ -27,10 +27,10 @@ import {
 import { checkHealth, getSessionCursor } from "./client.ts";
 import { loadProbeConfig, type ProbeConfig } from "./config.ts";
 import { createFlusher, type Flusher } from "./flush.ts";
-import { capValue } from "./limit.ts";
 import { assistantLike } from "./assistant.ts";
 import { BoundedQueue } from "./queue.ts";
 import { createProbeLogger, probeLogDir, type ProbeLogger } from "./logger.ts";
+import { createPayloadStore, type PayloadStore } from "./payload-store.ts";
 import { RequestTracker } from "./request.ts";
 import { sessionCursorStore } from "./session-cursor.ts";
 
@@ -49,6 +49,8 @@ interface ProbeState {
   flusher: Flusher;
   /** 请求序号 + 请求/响应对应；每个会话一个 */
   requests: RequestTracker;
+  /** 正文存储：请求体与事件正文都写成文件 */
+  payloads: PayloadStore;
   /** 把本轮运行序号写进会话游标（跨 Pi 进程不重置） */
   persistRunSeq: (seq: number) => void;
   token: string | null;
@@ -193,13 +195,16 @@ function pushEvent(
 ): void {
   if (!s.session) return;
   s.lastActivity = nowIso();
+  const eventId = randomUUID();
+  // 事件正文写成文件，批次里只带路径
+  const stored = s.payloads.write("event", s.session.sessionId, eventId, payload);
   emit(s, {
     kind: "event",
-    event_id: randomUUID(),
+    event_id: eventId,
     session_id: s.session.sessionId,
     layer,
     event_type: eventType,
-    payload: capValue(payload, s.config.maxRecordBytes).value,
+    payload_path: stored?.path ?? null,
     occurred_at: s.lastActivity,
     run_seq: location?.runSeq !== undefined ? location.runSeq : (s.runStartedAt ? s.runSeq : null),
     turn_index: location?.turnIndex !== undefined ? location.turnIndex : (s.turnStartedAt ? s.turnIndex : null),
@@ -306,9 +311,15 @@ export default function probe(pi: ExtensionAPI): void {
         }
       }
 
+      // 正文存储：与令牌同目录下的 payloads/，服务端按同一套相对路径解析
+      const payloads = createPayloadStore({
+        root: config.payloadDir,
+        log: (message) => logger.log(message),
+      });
+
       const requests = new RequestTracker({
         sessionId: session.sessionId,
-        maxBytes: config.maxRecordBytes,
+        store: payloads,
         initialSeq: cursor.requestSeq,
         persistSeq: (seq) => {
           cursor.requestSeq = seq;
@@ -333,9 +344,11 @@ export default function probe(pi: ExtensionAPI): void {
           },
           maxBatchRecords: config.maxBatchRecords,
           maxBatchBytes: config.maxBatchBytes,
+          payloadRoot: () => config.payloadDir,
           log: (message) => logger.log(message),
         }),
         requests,
+        payloads,
         persistRunSeq: (seq) => {
           cursor.runSeq = seq;
           persistCursor();
@@ -585,7 +598,6 @@ export default function probe(pi: ExtensionAPI): void {
         api: record.api,
         model: record.model,
         payloadBytes: record.payload_bytes,
-        payloadTruncated: record.payload_truncated,
       });
     }),
   );

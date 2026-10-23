@@ -11,6 +11,7 @@ const batch: IngestBatch = {
   probe_version: "0.1.0",
   dropped_count: 0,
   queue_depth: 0,
+  payload_root: null,
   records: [
     {
       kind: "event",
@@ -18,7 +19,7 @@ const batch: IngestBatch = {
       session_id: "s1",
       layer: "agent",
       event_type: "agent_start",
-      payload: {},
+      payload_path: null,
       occurred_at: null,
       run_seq: 1,
       turn_index: 0,
@@ -128,7 +129,6 @@ test("探针配置：默认地址、批量与队列上限", () => {
   assert.equal(config.batchSize, 50);
   assert.equal(config.maxQueueRecords, 2000);
   assert.equal(config.maxQueueBytes, 64 * 1024 * 1024);
-  assert.equal(config.maxRecordBytes, 512 * 1024);
   assert.equal(config.debugRequests, false);
   assert.equal(config.debug, false, "默认不打 stderr，避免打扰用户的终端");
   assert.ok(config.tokenFile === defaultTokenFile());

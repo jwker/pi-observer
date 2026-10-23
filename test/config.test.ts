@@ -3,13 +3,11 @@ import test from "node:test";
 
 import { checkNodeVersion, loadConfig } from "../src/lib/config.ts";
 
-test("默认配置：端口 4173、只监听 127.0.0.1、7 天保留、2 MB 批次上限", () => {
+test("默认配置：端口 4173、只监听 127.0.0.1、2 MB 批次上限", () => {
   const config = loadConfig({});
   assert.equal(config.host, "127.0.0.1");
   assert.equal(config.port, 4173);
-  assert.equal(config.retentionDays, 7);
   assert.equal(config.ingestMaxBytes, 2 * 1024 * 1024);
-  assert.equal(config.payloadMaxBytes, 512 * 1024);
   assert.ok(config.dbPath.endsWith("data/observer.db"));
   assert.ok(config.tokenPath.endsWith("data/token"));
   assert.ok(config.sessionsDir.endsWith(".pi/agent/sessions"));
@@ -27,14 +25,12 @@ test("环境变量覆盖默认值", () => {
   assert.equal(config.dataDir, "/tmp/custom-data");
   assert.equal(config.dbPath, "/tmp/custom-data/observer.db");
   assert.equal(config.sessionsDir, "/tmp/sessions");
-  assert.equal(config.retentionDays, 3);
   assert.equal(config.ingestMaxBytes, 1024);
 });
 
 test("非法环境变量回落到默认值", () => {
   const config = loadConfig({ PORT: "abc", PI_OBSERVER_RETENTION_DAYS: "-1" });
   assert.equal(config.port, 4173);
-  assert.equal(config.retentionDays, 7);
 });
 
 test("Node 版本下界 24、上界 27", () => {
