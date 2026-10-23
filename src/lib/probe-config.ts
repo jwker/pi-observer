@@ -15,6 +15,7 @@
  */
 
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { createConnection } from "node:net";
 import { dirname, isAbsolute, join } from "node:path";
 
 /** 配置文件名，放在数据目录下 */
@@ -111,4 +112,116 @@ function isHttpUrl(value: string): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * 服务端写进配置文件的地址。
+ *
+ * 端口取 `config().port`：Next 会把命令行上的 `-p` 写回 `process.env.PORT`，
+ * 所以这个值与服务实际监听的端口一致（实测 `-p 4321` → 写 4321）。
+ */
+export function serverProbeConfig(dataDir: string, port: number, host: string): ProbeFileConfig {
+  return {
+    version: PROBE_CONFIG_VERSION,
+    baseUrl: `http://${host}:${port}`,
+    tokenFile: join(dataDir, "token"),
+    payloadDir: join(dataDir, "payloads"),
+  };
+}
+
+/**
+ * 写配置文件，但只在内容真的变了的时候写。
+ *
+ * 为什么要有「只在变了时写」：服务端会定期刷新这个文件（见 `startProbeConfigRefresh`），
+ * 每次都重写会白白产生磁盘写入与文件事件。
+ *
+ * 返回 true 表示写了。
+ */
+export function writeProbeConfigIfChanged(path: string, config: ProbeFileConfig): boolean {
+  const current = readProbeFileConfig(path);
+  if (
+    current !== null &&
+    current.baseUrl === config.baseUrl &&
+    current.tokenFile === config.tokenFile &&
+    current.payloadDir === config.payloadDir
+  ) {
+    return false;
+  }
+  writeProbeFileConfig(path, config);
+  return true;
+}
+
+const REFRESH_GLOBAL_KEY = "__piObserverProbeConfigRefresh";
+
+/**
+ * 定期把「我在哪」写进配置文件。
+ *
+ * 为什么不能只在启动时写一次：服务可能换端口（桌面版每次启动都换），
+ * 也可能有另一个服务实例（比如开发服务）后来写了同一个文件然后退出了——
+ * 这时文件里留下的是一个已经不存在的地址，探针照着它推，怎么都推不到。
+ *
+ * 探针在推送失败时会重读这个文件（见 `ext/refresh.ts`），所以只要还活着的服务
+ * 持续刷新它，探针几秒内就能自己切到正确的地址。
+ *
+ * 两个服务同时跑时（开发服务 + 桌面版）不互相抢：文件里记的地址还活着，就让它留着；
+ * 那个服务没了，下一个活着的服务接手。两个服务共用同一个数据目录，
+ * 令牌与正文目录本来就是同一份，谁在写都一样。
+ */
+export function startProbeConfigRefresh(
+  dataDir: string,
+  port: number,
+  host: string,
+  intervalMs = 2_000,
+): void {
+  const g = globalThis as unknown as Record<string, ReturnType<typeof setInterval> | undefined>;
+  if (g[REFRESH_GLOBAL_KEY] !== undefined) return;
+  const path = probeConfigPath(dataDir);
+  const ours = serverProbeConfig(dataDir, port, host);
+  const timer = setInterval(() => {
+    void (async () => {
+      try {
+        const current = readProbeFileConfig(path);
+        if (current?.baseUrl !== undefined && current.baseUrl !== ours.baseUrl) {
+          // 文件里记的地址还活着：那是另一个还在跑的服务，别抢
+          if (await isListening(current.baseUrl)) return;
+        }
+        writeProbeConfigIfChanged(path, ours);
+      } catch {
+        // 写不了就算了：文件里还有旧地址，探针下次失败重读时还会拿到它
+      }
+    })();
+  }, intervalMs);
+  timer.unref?.();
+  g[REFRESH_GLOBAL_KEY] = timer;
+}
+
+/** 某个地址上还有没有人在听（只看端口通不通，不问它是什么服务） */
+function isListening(baseUrl: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    let url: URL;
+    try {
+      url = new URL(baseUrl);
+    } catch {
+      resolve(false);
+      return;
+    }
+    const port = Number(url.port || (url.protocol === "https:" ? 443 : 80));
+    const socket = createConnection({ host: url.hostname, port });
+    const done = (alive: boolean): void => {
+      socket.destroy();
+      resolve(alive);
+    };
+    socket.once("connect", () => done(true));
+    socket.once("error", () => done(false));
+    socket.setTimeout(800, () => done(false));
+  });
+}
+
+/** 停掉刷新定时器（测试与进程收尾用） */
+export function stopProbeConfigRefresh(): void {
+  const g = globalThis as unknown as Record<string, ReturnType<typeof setInterval> | undefined>;
+  const timer = g[REFRESH_GLOBAL_KEY];
+  if (timer === undefined) return;
+  clearInterval(timer);
+  delete g[REFRESH_GLOBAL_KEY];
 }

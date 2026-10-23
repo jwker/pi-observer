@@ -21,7 +21,7 @@ export async function register(): Promise<void> {
     { applyRetention, startRetentionJobs },
     { config },
     { payloadsRoot, tightenPayloadPermissions },
-    { PROBE_CONFIG_VERSION, probeConfigPath, writeProbeFileConfig },
+    { PROBE_CONFIG_VERSION, probeConfigPath, startProbeConfigRefresh, writeProbeFileConfig },
   ] = await Promise.all([
     import("./lib/backfill.ts"),
     import("./lib/log.ts"),
@@ -84,6 +84,11 @@ export async function register(): Promise<void> {
 
   // 探针要知道往哪推数据：把自己的地址与正文目录写进配置文件。
   // 探针跑在用户的 Pi 进程里，桌面版没法给它注入环境变量，只能靠这个文件。
+  //
+  // 写完还要**定期刷新**：服务可能换端口（桌面版每次启动都换），也可能有别的服务
+  // 实例后来写了同一个文件然后退出了 —— 文件里就留下一个不存在的地址，
+  // 探针照着它推怎么也推不到。持续刷新让还活着的服务把地址纠正回来，
+  // 探针在推送失败时重读这个文件，几秒内自己切过来。
   try {
     const cfg = config();
     const path = probeConfigPath(cfg.dataDir);
@@ -93,6 +98,7 @@ export async function register(): Promise<void> {
       tokenFile: cfg.tokenPath,
       payloadDir: payloadsRoot(cfg.dataDir),
     });
+    startProbeConfigRefresh(cfg.dataDir, cfg.port, cfg.host);
     log("info", "probe", "已写出探针配置", { path, base_url: `http://${cfg.host}:${cfg.port}` });
   } catch (error) {
     log("warn", "probe", "写探针配置失败", { error: (error as Error).message });

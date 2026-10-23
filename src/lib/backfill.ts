@@ -895,7 +895,12 @@ function latestTimestamp(values: Array<string | null>): string | null {
 }
 
 /** 递归列出目录下的会话文件（跳过隐藏目录） */
-function listSessionFiles(root: string, out: string[] = []): string[] {
+/**
+ * 列出会话目录下的所有 .jsonl 文件（递归）。
+ *
+ * 导出给「发现新会话文件」用：它要拿文件列表跟 `jsonl_files` 比。
+ */
+export function listSessionFiles(root: string, out: string[] = []): string[] {
   for (const entry of readdirSync(root, { withFileTypes: true })) {
     if (entry.name.startsWith(".")) continue;
     const full = join(root, entry.name);

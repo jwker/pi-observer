@@ -14,12 +14,26 @@
  * 定时器挂在 `globalThis` 上，开发态热重载不会叠出第二个循环；`unref()` 保证它
  * 不拖住进程退出。
  */
-import { createBackfillContext, ensureSessionBackfilled, type BackfillContext } from "./backfill.ts";
+import {
+  backfillFile,
+  createBackfillContext,
+  ensureSessionBackfilled,
+  listSessionFiles,
+  type BackfillContext,
+} from "./backfill.ts";
 import type { Db } from "./db.ts";
 import { log } from "./log.ts";
 import { broadcast } from "./sse.ts";
 
 export const SYNC_INTERVAL_MS = 1_000;
+
+/**
+ * 发现新会话文件的间隔。
+ *
+ * 比每秒的同步慢：那个循环只跟进**已经知道**的活跃会话，而新会话文件得先被发现
+ * 才能被跟进。探针没装或推不到服务上时，全靠这一条。
+ */
+export const DISCOVER_INTERVAL_MS = 10_000;
 
 export interface SyncSummary {
   /** 本轮检查的活跃会话数 */
@@ -63,10 +77,68 @@ export function syncActiveSessions(ctx: BackfillContext = createBackfillContext(
   return summary;
 }
 
+export interface DiscoverySummary {
+  /** 会话目录里有多少个会话文件 */
+  files: number;
+  /** 本轮新发现的会话数 */
+  discovered: number;
+  /** 新入库的条目数 */
+  entries: number;
+  /** 新发现的会话 id */
+  sessionIds: string[];
+  took_ms: number;
+}
+
+/**
+ * 发现运行期间新建的会话文件。
+ *
+ * 为什么要有：每秒的同步只跟进「库里已经知道、且状态是 active」的会话，
+ * 而新会话文件（比如用户刚在一个新目录里开的对话）没人告诉服务。
+ * 以前只有两条路能让它上板：探针推来 session_start，或者服务重启时全量扫描。
+ * 探针没装、没跑、或者推不到服务上时，新对话就一直不显示，刷新也没用。
+ *
+ * 代价：每轮要列一次会话目录，并对每个文件查一次 `jsonl_files`。
+ * 目录里文件多时按 10 秒一轮的间隔走，够用也不贵。
+ */
+export function discoverNewSessions(ctx: BackfillContext = createBackfillContext()): DiscoverySummary {
+  const started = Date.now();
+  const summary: DiscoverySummary = { files: 0, discovered: 0, entries: 0, sessionIds: [], took_ms: 0 };
+
+  let paths: string[];
+  try {
+    paths = listSessionFiles(ctx.sessionsDir);
+  } catch (error) {
+    log("warn", "sync", "读不到会话目录", { error: (error as Error).message });
+    summary.took_ms = Date.now() - started;
+    return summary;
+  }
+  summary.files = paths.length;
+
+  for (const path of paths) {
+    // 已经在库里的：活跃会话由每秒同步跟进，不在这里重复处理
+    const known = ctx.db.prepare("SELECT 1 FROM jsonl_files WHERE path = ?").get(path);
+    if (known !== undefined) continue;
+
+    const result = backfillFile(path, ctx);
+    if (result.sessionId === null || result.skipped) continue;
+    summary.discovered += 1;
+    summary.entries += result.entries;
+    summary.sessionIds.push(result.sessionId);
+    // 广播出去：页面据此增量拉取，不用等用户手动刷新
+    broadcast("session.updated", { session_id: result.sessionId, discovered: true });
+    log("info", "sync", "发现新会话", { session_id: result.sessionId, entries: result.entries });
+  }
+
+  summary.took_ms = Date.now() - started;
+  return summary;
+}
+
 const GLOBAL_KEY = "__piObserverSessionSync";
 
 interface SyncHandle {
   timer: ReturnType<typeof setInterval>;
+  /** 发现新会话文件的定时器：比同步慢，单独一拍 */
+  discoverTimer: ReturnType<typeof setInterval>;
   running: boolean;
 }
 
@@ -93,10 +165,25 @@ export function startSessionSync(intervalMs = SYNC_INTERVAL_MS): void {
         state.running = false;
       }
     }, intervalMs),
+    discoverTimer: setInterval(() => {
+      if (state.running) return;
+      state.running = true;
+      try {
+        discoverNewSessions();
+      } catch (error) {
+        log("warn", "sync", "发现新会话失败", { error: (error as Error).message });
+      } finally {
+        state.running = false;
+      }
+    }, Math.max(intervalMs, DISCOVER_INTERVAL_MS)),
   };
   state.timer.unref?.();
+  state.discoverTimer.unref?.();
   (globalThis as unknown as Record<string, SyncHandle | undefined>)[GLOBAL_KEY] = state;
-  log("info", "sync", "活跃会话同步已启动", { interval_ms: intervalMs });
+  log("info", "sync", "活跃会话同步已启动", {
+    interval_ms: intervalMs,
+    discover_interval_ms: Math.max(intervalMs, DISCOVER_INTERVAL_MS),
+  });
 }
 
 /** 停止同步（测试与进程收尾用） */
@@ -104,5 +191,6 @@ export function stopSessionSync(): void {
   const state = handle();
   if (state === undefined) return;
   clearInterval(state.timer);
+  clearInterval(state.discoverTimer);
   delete (globalThis as unknown as Record<string, SyncHandle | undefined>)[GLOBAL_KEY];
 }
