@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!--
+    pi-observer 应用图标。
+
+    画的是一条「运行时的活动流」：平段是空闲，中间几次起伏是模型请求与工具调用，
+    末尾那颗绿点是「现在正在跑」。配色跟看板的深色主题一致：
+    背景 #151a20 → #0b0d10，波形用强调蓝 #5aa9ff，活跃点用 #41b558。
+  -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1b212a"/>
+      <stop offset="1" stop-color="#0b0d10"/>
+    </linearGradient>
+    <linearGradient id="stroke" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#5aa9ff" stop-opacity="0.65"/>
+      <stop offset="0.45" stop-color="#5aa9ff"/>
+      <stop offset="1" stop-color="#7cc0ff"/>
+    </linearGradient>
+    <filter id="glow" x="-30%" y="-60%" width="160%" height="220%">
+      <feGaussianBlur stdDeviation="18" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <filter id="dotGlow" x="-120%" y="-120%" width="340%" height="340%">
+      <feGaussianBlur stdDeviation="18" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- 底板 -->
+  <rect x="0" y="0" width="1024" height="1024" rx="228" fill="url(#bg)"/>
+  <rect x="14" y="14" width="996" height="996" rx="216" fill="none" stroke="#d7dee6" stroke-opacity="0.08" stroke-width="6"/>
+
+  <!-- 背景里的时间轴刻度：淡淡的几条横线，暗示「时间线」 -->
+  <g stroke="#d7dee6" stroke-opacity="0.05" stroke-width="4">
+    <line x1="150" y1="352" x2="874" y2="352"/>
+    <line x1="150" y1="512" x2="874" y2="512"/>
+    <line x1="150" y1="672" x2="874" y2="672"/>
+  </g>
+
+  <!-- 活动流 -->
+  <path
+    d="M 186 512 L 276 512 L 306 470 L 336 556 L 366 512 L 466 512
+       L 498 416 L 530 608 L 562 512 L 662 512 L 692 470 L 722 556 L 752 512 L 806 512"
+    fill="none"
+    stroke="url(#stroke)"
+    stroke-width="36"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    filter="url(#glow)"
+  />
+
+  <!-- 正在跑：末尾的绿点 -->
+  <circle cx="812" cy="512" r="30" fill="#41b558" filter="url(#dotGlow)"/>
+</svg>

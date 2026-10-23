@@ -72,13 +72,29 @@ npx electron-builder --mac dmg
 
 - **没有签名也没有公证**。自己机器上双击能开；给别人装的话 Gatekeeper 会拦，
   要签名与公证（需要 Apple 开发者账号）。
-- **图标还没做**，现在用的是 Electron 默认图标。
+- **图标是自己画的**（`build/icon.svg` → `build/icon.icns`）：
+  深色底板上一条蓝色的活动流，末尾一颗绿点表示「正在跑」。
+  改了 SVG 之后重新生成 `.icns` 的步骤见下。
 - **只构了 arm64**（Apple 芯片）。要 Intel 版把 `electron-builder.yml` 里的
   `arch` 加上 `x64`。
 - 打包配置放在 `electron-builder.yml`，不放 `package.json`：后者会被各种工具重写，
   配置单独放不容易丢。
 - 服务产物与探针代码走 `extraResources`（落在 `Contents/Resources/pi-observer/`），
   不进 `app.asar`：子进程要能直接读这些文件，asar 里的读不了。
+
+## 改图标
+
+`build/icon.svg` 是源文件。macOS 自带工具不认 SVG，用无头 Chrome 渲染成 PNG，
+再用 `iconutil` 拼成 `.icns`：
+
+```bash
+node tools/desktop/render-icon.mjs
+```
+
+脚本做三件事：用无头 Chrome 把 SVG 渲染成 1024×1024 的 PNG、用 `sips` 缩出各尺寸与
+@2x 版本、用 `iconutil` 拼成 `icon.icns`。
+
+`build/icon.icns` 会被 electron-builder 自动用上（`build` 目录是默认的资源目录）。
 
 ## 几个关键决定
 
