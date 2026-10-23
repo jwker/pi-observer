@@ -23,6 +23,8 @@ export interface ProbeView {
   /** 探针是否在最近 15 秒内推过数据 */
   live: boolean;
   subscribers: number;
+  /** 服务实际监听的地址（桌面版端口是随机的，不能写死） */
+  baseUrl: string | null;
   /** 服务端最近的 warn / error（例如批次被拒的原因） */
   problems: ProbeProblem[];
 }
@@ -33,6 +35,7 @@ export function useProbeStatus(): ProbeView {
   const [probe, setProbe] = useState<ProbeStatusRow | null>(null);
   const [subscribers, setSubscribers] = useState(0);
   const [problems, setProblems] = useState<ProbeProblem[]>([]);
+  const [baseUrl, setBaseUrl] = useState<string | null>(null);
   const stream = useStreamStatus();
   const now = useNow(1000);
 
@@ -40,11 +43,12 @@ export function useProbeStatus(): ProbeView {
     let cancelled = false;
     fetch("/api/health")
       .then((response) => response.json())
-      .then((json: { probe?: ProbeStatusRow | null; subscribers?: number; recent_problems?: ProbeProblem[] }) => {
+      .then((json: { probe?: ProbeStatusRow | null; subscribers?: number; recent_problems?: ProbeProblem[]; base_url?: string }) => {
         if (cancelled) return;
         setProbe(json.probe ?? null);
         setSubscribers(json.subscribers ?? 0);
         setProblems(json.recent_problems ?? []);
+        setBaseUrl(typeof json.base_url === "string" ? json.base_url : null);
       })
       .catch(() => {
         // 服务暂不可达时保持空状态
@@ -67,5 +71,5 @@ export function useProbeStatus(): ProbeView {
 
   const live = probe?.last_seen_at ? now - Date.parse(probe.last_seen_at) < STALE_MS : false;
 
-  return { probe, stream, live, subscribers, problems };
+  return { probe, stream, live, subscribers, baseUrl, problems };
 }

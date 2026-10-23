@@ -6,7 +6,7 @@ import { useProbeStatus } from "./use-probe-status.ts";
 
 /** 底部状态栏：探针连接、最近推送、队列深度、累计丢弃（对应原型状态栏） */
 export function StatusBar() {
-  const { probe, stream, live, problems } = useProbeStatus();
+  const { probe, stream, live, problems, baseUrl } = useProbeStatus();
   const now = useNow(1000);
   const dropped = probe?.dropped_count ?? 0;
 
@@ -52,7 +52,7 @@ export function StatusBar() {
           </span>
         ) : null}
         <span className="spacer" />
-        <span className="item faint">数据仅存本机 127.0.0.1:4173</span>
+        <span className="item faint">数据仅存本机 {baseUrl ?? "127.0.0.1:4173"}</span>
       </div>
     </div>
   );
