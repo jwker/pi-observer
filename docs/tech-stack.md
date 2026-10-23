@@ -171,6 +171,7 @@ pi-observer/
 - `request_seq` / `run_seq` 写 `data/session-cursor/<会话哈希>.json`，只为跨 Pi 进程续跑时不覆盖旧请求与旧运行；不写 Pi 的会话文件。本地游标缺失时从看板的 `/api/sessions/:id/cursor` 取最大序号种子化。
 - 探针日志写 `~/.pi-observer/probe.log`（默认不打 stderr）：探针在用户的 Pi 进程里，打到 stderr 会污染他们自己项目的终端。
 - **运行数据必须在工程外**（`~/.pi-observer/`）：Turbopack 监听工程目录里的文件变化，而看板自己在往数据目录写正文、日志与 WAL。放在仓库里时每次写入都触发一次重编译，dev 下页面不停整页重载（实测每秒 2~6 次；移出去后 12 秒内 0 次）。
+- **不能在仓库里建 `data` 软链**：Turbopack 会跟随符号链接监听目标目录，「放在工程外」等于没做（实测软链方案下仍有十几次编译 / 5 秒）。
 - 探针不进入 Next 的构建范围，`ext/` 不是 `src/` 下的内容。
 
 ---
