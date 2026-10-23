@@ -98,10 +98,14 @@ node tools/desktop/render-icon.mjs
 
 ## 几个关键决定
 
-**用 Electron 自带的 Node 跑服务，不用另带一份 Node。**
-Electron 的二进制设了 `ELECTRON_RUN_AS_NODE=1` 就是一个纯 Node 运行时
-（实测 Electron 45 内置 Node 24.22，`node:sqlite` 可用），直接跑 `server/server.js` 即可。
-应用包里因此不用塞 100 MB 的 Node。
+**服务直接跑在 Electron 的主进程里，不再另起进程。**
+这是为了 Dock 里只出现一个图标：另起的进程（用 Electron 的二进制当 Node 起，
+或者用工具进程起）都会被 macOS 当成另一个应用注册，Next 又会把进程名改成
+`next-server (v16.4.2)`，Dock 里就多出一个没有名字的图标。
+只有一个进程就没有这个问题，而且不用往应用包里塞 100 MB 的 Node。
+
+代价：服务崩了应用也跟着崩（会弹窗提示错误），退出时不用另外收进程。
+另外 Next 会改进程名，主进程每秒把它改回 `pi-observer`。
 
 **端口随机挑。**
 `next start` 的 `-p` 会覆盖 `PORT` 环境变量，而 standalone 产物是直接跑 `server.js`，

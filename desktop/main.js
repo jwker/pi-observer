@@ -15,7 +15,6 @@
  * 和用户自己开着的开发服务撞车；探针靠 `probe.json` 找到服务，不受影响。
  */
 const { app, BrowserWindow, shell } = require("electron");
-const { spawn } = require("node:child_process");
 const { existsSync } = require("node:fs");
 const net = require("node:net");
 const os = require("node:os");
@@ -32,7 +31,6 @@ const resourcesDir = app.isPackaged
 /** 运行数据目录：默认在工程外（家目录），和现在跑服务时一样 */
 const dataDir = process.env.PI_OBSERVER_DATA_DIR || path.join(os.homedir(), ".pi-observer");
 
-let serverProcess = null;
 let mainWindow = null;
 
 /** 找一个空闲端口：本机回环上随机端口，绑定后立刻放开 */
@@ -72,31 +70,35 @@ function startServer(port) {
     );
   }
 
-  const child = spawn(process.execPath, [entry], {
-    // Electron 的二进制当纯 Node 用
-    env: {
-      ...process.env,
-      ELECTRON_RUN_AS_NODE: "1",
-      PORT: String(port),
-      HOSTNAME: "127.0.0.1",
-      PI_OBSERVER_DATA_DIR: dataDir,
-      // 探针源码在应用包里：设置页的「安装探针」要从这里复制到 ~/.pi-observer/probe
-      PI_OBSERVER_PROBE_DIR: path.join(resourcesDir, "probe"),
-    },
-    stdio: ["ignore", "pipe", "pipe"],
+  // 服务直接跑在主进程里，不再另起进程。
+  //
+  // 为什么：另起的进程（不管是用 Electron 的二进制当 Node，还是用工具进程）
+  // 都会被 macOS 当成另一个应用注册，Dock 里会多出一个没有名字的图标
+  // （Next 会把进程名改成 "next-server (v16.4.2)"）。
+  // 只有一个进程就没有这个问题。
+  //
+  // 代价：服务崩了应用也跟着崩（错误会弹窗提示），退出时要等它自己收尾。
+  process.env.PORT = String(port);
+  process.env.HOSTNAME = "127.0.0.1";
+  process.env.PI_OBSERVER_DATA_DIR = dataDir;
+  // 探针源码在应用包里：设置页的「安装探针」要从这里复制到 ~/.pi-observer/probe
+  process.env.PI_OBSERVER_PROBE_DIR = path.join(resourcesDir, "probe");
+
+  const { pathToFileURL } = require("node:url");
+  void import(pathToFileURL(entry).href).catch((error) => {
+    process.stderr.write(`[看板服务] 起不来：${error.message}\n`);
   });
 
-  const log = (line) => {
-    process.stderr.write(`[看板服务] ${line}\n`);
+  // Next 会把进程名改成 "next-server (v16.4.2)"，桌面上会显示成那个名字。
+  // 改回来：应用在 Dock 里应该叫 pi-observer。
+  const restoreTitle = () => {
+    if (process.title !== "pi-observer") process.title = "pi-observer";
   };
-  child.stdout.on("data", (chunk) => log(String(chunk).trimEnd()));
-  child.stderr.on("data", (chunk) => log(String(chunk).trimEnd()));
-  child.on("exit", (code, signal) => {
-    log(`服务进程退出（code=${code} signal=${signal}）`);
-    serverProcess = null;
-  });
+  restoreTitle();
+  const timer = setInterval(restoreTitle, 1000);
+  timer.unref?.();
 
-  return child;
+  return null;
 }
 
 function createWindow(port) {
@@ -127,7 +129,7 @@ function createWindow(port) {
 app.whenReady().then(async () => {
   try {
     const port = await findFreePort();
-    serverProcess = startServer(port);
+    startServer(port);
     await waitForHealth(port);
     createWindow(port);
   } catch (error) {
@@ -140,7 +142,7 @@ app.whenReady().then(async () => {
       // macOS 上点 Dock 图标：重新拉一次服务再开窗口
       void app.whenReady().then(async () => {
         const port = await findFreePort();
-        serverProcess = startServer(port);
+        startServer(port);
         await waitForHealth(port);
         createWindow(port);
       });
@@ -161,9 +163,5 @@ app.on("window-all-closed", () => {
 });
 
 app.on("before-quit", () => {
-  if (serverProcess !== null) {
-    // 服务端对 SIGTERM 有优雅退出：关 SSE、checkpoint、关库
-    serverProcess.kill("SIGTERM");
-    serverProcess = null;
-  }
+  // 服务在主进程里，退出时不用另外收：进程一起没了。
 });
