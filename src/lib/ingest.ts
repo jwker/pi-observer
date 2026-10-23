@@ -1,3 +1,4 @@
+import { realpathSync } from "node:fs";
 import { resolve } from "node:path";
 
 import { config } from "./config.ts";
@@ -19,6 +20,21 @@ import {
 import { broadcast } from "./sse.ts";
 
 export type ParseResult = { ok: true; batch: IngestBatch } | { ok: false; error: string };
+
+/**
+ * 解析路径里的符号链接，解析不了就退回绝对路径。
+ *
+ * 用途只有一个：比较探针与服务端的正文目录是不是同一处。
+ * `realpathSync` 在目录还不存在时会抛错，所以要先 `resolve` 再试。
+ */
+function realish(path: string): string {
+  const absolute = resolve(path);
+  try {
+    return realpathSync(absolute);
+  } catch {
+    return absolute;
+  }
+}
 
 const KINDS = new Set(["session", "run", "event", "turn", "tool_call", "request"]);
 const EVENT_LAYERS = new Set<EventLayer>(["session", "agent", "tool", "provider"]);
@@ -239,8 +255,10 @@ export function applyBatch(batch: IngestBatch, db: Db, payloadRoot: string = pay
   const touched = new Set<string>();
   const now = new Date().toISOString();
   // 探针与服务端的数据目录必须一致，否则服务端按相对路径找不到探针写的文件。
+  // 比较前先解析符号链接：`data` 是指向 `~/.pi-observer` 的软链时，两边写的是同一个目录，
+  // 但字符串不同（`<仓库>/data/payloads` vs `~/.pi-observer/payloads`）——不解析就会误报。
   if (typeof batch.payload_root === "string" && batch.payload_root !== "" &&
-      resolve(batch.payload_root) !== resolve(payloadRoot)) {
+      realish(batch.payload_root) !== realish(payloadRoot)) {
     log("warn", "ingest", "探针与服务端的正文目录不一致，服务端可能读不到探针写的正文", {
       probe: batch.payload_root,
       server: payloadRoot,
