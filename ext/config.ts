@@ -6,9 +6,22 @@
  *   - 也不放在 pi-observer 仓库里：看板服务在 dev 下会往数据目录持续写文件，
  *     放在仓库里会被 Turbopack 当成源码变化 → 页面不停整页重载。
  * 要覆盖就设 `PI_OBSERVER_TOKEN_FILE`（正文目录默认跟着它走）。
+ *
+ * 取值顺序：**环境变量 > 配置文件 > 内置默认值**。
+ *
+ * 配置文件（`<数据目录>/probe.json`）是给「服务地址不一定在 4173」的场景准备的：
+ * 桌面版会自己挑一个空闲端口，然后把这个文件写好；探针读它就知道往哪推。
+ * 环境变量仍然优先——它是人手动设的，比文件更明确。
  */
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+
+import {
+  PROBE_CONFIG_FILE_NAME,
+  PROBE_CONFIG_VERSION,
+  readProbeFileConfig,
+  type ProbeFileConfig,
+} from "../src/lib/probe-config.ts";
 
 export interface ProbeConfig {
   /** 看板服务基地址 */
@@ -54,8 +67,29 @@ export function defaultTokenFile(): string {
 }
 
 export function loadProbeConfig(env: Record<string, string | undefined> = process.env): ProbeConfig {
-  const baseUrl = (env.PI_OBSERVER_URL?.trim() || "http://127.0.0.1:4173").replace(/\/+$/, "");
-  const tokenFile = env.PI_OBSERVER_TOKEN_FILE?.trim() || defaultTokenFile();
+  // 配置文件的位置跟着「会用哪个令牌文件」走：环境变量指定了令牌就在它旁边找，
+  // 没指定就在默认数据目录里找。只找这一处，行为可预测。
+  const tokenCandidate = env.PI_OBSERVER_TOKEN_FILE?.trim() || defaultTokenFile();
+  const fileConfig = readProbeFileConfig(join(dirname(tokenCandidate), PROBE_CONFIG_FILE_NAME));
+  return resolveProbeConfig(env, fileConfig);
+}
+
+/**
+ * 把环境变量与配置文件合成一份最终配置。
+ *
+ * 拆成纯函数是为了能单独测优先级：环境变量 > 配置文件 > 默认值。
+ */
+export function resolveProbeConfig(
+  env: Record<string, string | undefined>,
+  fileConfig: ProbeFileConfig | null,
+): ProbeConfig {
+  const file: ProbeFileConfig = fileConfig ?? { version: PROBE_CONFIG_VERSION };
+  const baseUrl = (
+    env.PI_OBSERVER_URL?.trim() ||
+    file.baseUrl?.trim() ||
+    "http://127.0.0.1:4173"
+  ).replace(/\/+$/, "");
+  const tokenFile = env.PI_OBSERVER_TOKEN_FILE?.trim() || file.tokenFile?.trim() || defaultTokenFile();
   return {
     baseUrl,
     ingestUrl: `${baseUrl}/api/ingest`,
@@ -69,7 +103,8 @@ export function loadProbeConfig(env: Record<string, string | undefined> = proces
     maxQueueBytes: intFromEnv(env.PI_OBSERVER_MAX_QUEUE_BYTES, 64 * 1024 * 1024),
     // 正文目录跟着**实际用的**令牌文件走（不是默认路径）：
     // 令牌指到别处时，正文也必须写到同一个数据目录，否则服务端按相对路径找不到正文。
-    payloadDir: env.PI_OBSERVER_PAYLOAD_DIR?.trim() || join(dirname(tokenFile), "payloads"),
+    payloadDir:
+      env.PI_OBSERVER_PAYLOAD_DIR?.trim() || file.payloadDir?.trim() || join(dirname(tokenFile), "payloads"),
     debugRequests: boolFromEnv(env.PI_OBSERVER_DEBUG_REQUESTS, false),
     debug: boolFromEnv(env.PI_OBSERVER_DEBUG, false),
   };

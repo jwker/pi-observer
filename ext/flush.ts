@@ -35,13 +35,19 @@ function describeBatch(records: IngestRecord[]): string {
 
 export interface FlushDeps {
   queue: BoundedQueue<IngestRecord>;
-  ingestUrl: string;
+  /** 写入地址。每次发送时现取：看板换了端口以后不用重启 Pi */
+  ingestUrl: () => string;
   /** 取令牌；服务端可能还没启动过，取不到就返回 null */
   token: () => string | null;
   /** 被服务端拒绝（毒批）而丢弃的条数 */
   rejectedCount: () => number;
   /** 服务端回了 401：清掉内存里缓存的令牌，下次重试重新读令牌文件 */
   onUnauthorized?: () => void;
+  /**
+   * 连不上（或被拒）时调用：让上层有机会重读配置文件、换个地址。
+   * 返回 true 表示地址真的变了，退避重新开始，立刻用新地址再试一次。
+   */
+  onUnreachable?: () => boolean;
   maxBatchRecords: number;
   maxBatchBytes: number;
   /** 探针写正文文件的根目录；批次里报给服务端做一致性检查 */
@@ -103,7 +109,7 @@ export function createFlusher(deps: FlushDeps): Flusher {
         records,
       };
 
-      const outcome = await post({ url: deps.ingestUrl, token, batch, timeoutMs: options.timeoutMs });
+      const outcome = await post({ url: deps.ingestUrl(), token, batch, timeoutMs: options.timeoutMs });
 
       if (outcome.ok) {
         attempt = 0;
@@ -113,6 +119,15 @@ export function createFlusher(deps: FlushDeps): Flusher {
 
       if (outcome.retryable) {
         deps.queue.requeue(records);
+        // 地址可能变了（桌面版换端口、服务重启后换了端口）：让上层重读配置文件。
+        // 真变了就跳过退避，立刻用新地址再试——不然用户要等最多 15 秒才知道换地址了。
+        const switched = deps.onUnreachable?.() ?? false;
+        if (switched) {
+          attempt = 0;
+          nextAttemptAt = 0;
+          deps.log(`看板地址已切换，立即用新地址重试`);
+          return false;
+        }
         // 注意顺序：先按「已有失败次数」取档位，再累加，
         // 否则第一次失败会直接跳到第二档（1s 变 2s）
         const wait = backoffDelay(attempt);

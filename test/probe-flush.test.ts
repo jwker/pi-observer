@@ -39,10 +39,12 @@ function harness(options: {
   queue: BoundedQueue<IngestRecord>;
   outcome?: () => PostOutcome;
   onUnauthorized?: () => void;
+  onUnreachable?: () => boolean;
   token?: string | null;
   now?: () => number;
   maxBatchRecords?: number;
   maxBatchBytes?: number;
+  ingestUrl?: () => string;
 }): Harness {
   const sent: IngestRecord[][] = [];
   const logs: string[] = [];
@@ -51,10 +53,11 @@ function harness(options: {
 
   const flusher = createFlusher({
     queue: options.queue,
-    ingestUrl: "http://127.0.0.1:4173/api/ingest",
+    ingestUrl: options.ingestUrl ?? (() => "http://127.0.0.1:4173/api/ingest"),
     token: () => (options.token === undefined ? "token" : options.token),
     rejectedCount: () => 0,
     onUnauthorized: options.onUnauthorized,
+    onUnreachable: options.onUnreachable,
     maxBatchRecords: options.maxBatchRecords ?? 200,
     maxBatchBytes: options.maxBatchBytes ?? 1024 * 1024,
     payloadRoot: () => "/tmp/payloads",
@@ -174,6 +177,64 @@ test("按字节装车：单批不超过上限，剩下的下一批发", async ()
   assert.equal(queue.depth, 0);
 });
 
+test("连不上时重读配置：地址变了就立即换过去重发，不等退避", async () => {
+  const queue = makeQueue(3);
+  let address = "http://127.0.0.1:4173/api/ingest";
+  const used: string[] = [];
+  let switched = false;
+
+  const flusher = createFlusher({
+    queue,
+    ingestUrl: () => address,
+    token: () => "t",
+    rejectedCount: () => 0,
+    // 第一次失败时上层把地址换掉，并告知「真的变了」
+    onUnreachable: () => {
+      if (switched) return false;
+      switched = true;
+      address = "http://127.0.0.1:53124/api/ingest";
+      return true;
+    },
+    maxBatchRecords: 200,
+    maxBatchBytes: 1024 * 1024,
+    payloadRoot: () => "/tmp/payloads",
+    log: () => {},
+    post: async (input) => {
+      used.push(input.url);
+      return used.length === 1
+        ? { ok: false, retryable: true, reason: "fetch failed", status: null }
+        : { ok: true, applied: {}, status: 200 };
+    },
+  });
+
+  assert.equal(await flusher.flush(), false, "第一次没发出去");
+  assert.equal(queue.depth, 3, "记录要放回队列");
+  assert.equal(flusher.attempt(), 0, "换了地址就不用再等退避");
+  assert.equal(flusher.nextAttemptAt(), 0);
+
+  assert.equal(await flusher.flush(), true, "第二次用新地址就发成了");
+  assert.deepEqual(used, ["http://127.0.0.1:4173/api/ingest", "http://127.0.0.1:53124/api/ingest"]);
+  assert.equal(queue.depth, 0);
+});
+
+test("连不上但配置没变：照旧退避，不反复读文件", async () => {
+  const queue = makeQueue(2);
+  let calls = 0;
+  const { flusher } = harness({
+    queue,
+    outcome: () => ({ ok: false, retryable: true, reason: "fetch failed", status: null }),
+    onUnreachable: () => {
+      calls += 1;
+      return false;
+    },
+  });
+
+  assert.equal(await flusher.flush(), false);
+  assert.equal(calls, 1, "每次失败都会问一次上层要不要换地址");
+  assert.equal(flusher.attempt(), 1, "地址没变就照旧退避");
+  assert.ok(flusher.nextAttemptAt() > 0);
+});
+
 test("回归：处在退避窗口里时，收尾排空仍必须把积压发出去", async () => {
   // 复现故障现场：服务端不可达 → 退避窗口被推到未来 → 服务端恢复 → Pi 退出
   const queue = makeQueue(4);
@@ -246,7 +307,7 @@ test("协议号随批次上报，且带队列深度", async () => {
   const seen: Array<{ protocol: number; queue_depth: number; dropped_count: number }> = [];
   const flusher = createFlusher({
     queue,
-    ingestUrl: "u",
+    ingestUrl: () => "u",
     token: () => "t",
     rejectedCount: () => 7,
     maxBatchRecords: 200,

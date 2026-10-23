@@ -31,6 +31,7 @@ import { assistantLike } from "./assistant.ts";
 import { BoundedQueue } from "./queue.ts";
 import { createProbeLogger, probeLogDir, type ProbeLogger } from "./logger.ts";
 import { createPayloadStore, type PayloadStore } from "./payload-store.ts";
+import { refreshProbeConfig } from "./refresh.ts";
 import { RequestTracker } from "./request.ts";
 import { sessionCursorStore } from "./session-cursor.ts";
 
@@ -166,6 +167,26 @@ function readToken(s: ProbeState): string | null {
     // 看板服务还没启动过，令牌文件还不存在；下次再试
   }
   return s.token;
+}
+
+/**
+ * 重读配置文件，看看板地址、数据目录是不是变了。
+ *
+ * 什么时候会变：桌面版自己挑空闲端口，服务重启后端口也可能不一样。
+ * 环境变量没法注入到已经在跑的 Pi 进程里，所以只能靠文件——
+ * 连不上的时候重读一次，变了就换过去，不用让用户重开 Pi。
+ *
+ * 返回 true 表示配置真的变了。
+ */
+function refreshConfig(s: ProbeState): boolean {
+  const result = refreshProbeConfig(s.config, () => loadProbeConfig());
+  if (!result.changed) return false;
+
+  s.config = result.config;
+  // 令牌文件换了的话，缓存里的旧令牌作废：下一批重新读新文件
+  if (result.tokenFileChanged) s.token = null;
+  logger.log(`看板配置已更新：${result.config.baseUrl}`);
+  return true;
 }
 
 /**
@@ -311,9 +332,10 @@ export default function probe(pi: ExtensionAPI): void {
         }
       }
 
-      // 正文存储：与令牌同目录下的 payloads/，服务端按同一套相对路径解析
+      // 正文存储：与令牌同目录下的 payloads/，服务端按同一套相对路径解析。
+      // 根目录取的时候现取：数据目录变了以后不用重启 Pi。
       const payloads = createPayloadStore({
-        root: config.payloadDir,
+        root: () => nextState.config.payloadDir,
         log: (message) => logger.log(message),
       });
 
@@ -334,7 +356,8 @@ export default function probe(pi: ExtensionAPI): void {
         queue,
         flusher: createFlusher({
           queue,
-          ingestUrl: config.ingestUrl,
+          // 现取：看板地址变了以后不用重启 Pi
+          ingestUrl: () => nextState.config.ingestUrl,
           token: () => readToken(nextState),
           rejectedCount: () => nextState.rejectedByServer,
           // 服务端回了 401 说明缓存的令牌不再有效（重新生成过、指向了别的实例）。
@@ -342,6 +365,8 @@ export default function probe(pi: ExtensionAPI): void {
           onUnauthorized: () => {
             nextState.token = null;
           },
+          // 连不上时重读配置文件：桌面版换端口、服务重启后换端口都能跟上
+          onUnreachable: () => refreshConfig(nextState),
           maxBatchRecords: config.maxBatchRecords,
           maxBatchBytes: config.maxBatchBytes,
           payloadRoot: () => config.payloadDir,

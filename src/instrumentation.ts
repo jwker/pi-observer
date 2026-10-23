@@ -21,6 +21,7 @@ export async function register(): Promise<void> {
     { applyRetention, startRetentionJobs },
     { config },
     { payloadsRoot, tightenPayloadPermissions },
+    { PROBE_CONFIG_VERSION, probeConfigPath, writeProbeFileConfig },
   ] = await Promise.all([
     import("./lib/backfill.ts"),
     import("./lib/log.ts"),
@@ -30,6 +31,7 @@ export async function register(): Promise<void> {
     import("./lib/retention.ts"),
     import("./lib/config.ts"),
     import("./lib/payload-files.ts"),
+    import("./lib/probe-config.ts"),
   ]);
 
   try {
@@ -78,6 +80,22 @@ export async function register(): Promise<void> {
     }
   } catch (error) {
     log("warn", "storage", "收紧正文文件权限失败", { error: (error as Error).message });
+  }
+
+  // 探针要知道往哪推数据：把自己的地址与正文目录写进配置文件。
+  // 探针跑在用户的 Pi 进程里，桌面版没法给它注入环境变量，只能靠这个文件。
+  try {
+    const cfg = config();
+    const path = probeConfigPath(cfg.dataDir);
+    writeProbeFileConfig(path, {
+      version: PROBE_CONFIG_VERSION,
+      baseUrl: `http://${cfg.host}:${cfg.port}`,
+      tokenFile: cfg.tokenPath,
+      payloadDir: payloadsRoot(cfg.dataDir),
+    });
+    log("info", "probe", "已写出探针配置", { path, base_url: `http://${cfg.host}:${cfg.port}` });
+  } catch (error) {
+    log("warn", "probe", "写探针配置失败", { error: (error as Error).message });
   }
 
   // 启动扫描之后开始每秒跟进活跃会话；已有循环时是幂等的。

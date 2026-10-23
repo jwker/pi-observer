@@ -34,11 +34,21 @@ export interface PayloadStore {
 /** 序列化失败（循环引用等）时的占位 */
 const UNSERIALIZABLE = JSON.stringify({ unserializable: true });
 
-export function createPayloadStore(options: { root: string; log?: (message: string) => void }): PayloadStore {
-  const root = options.root;
+export interface PayloadStoreOptions {
+  /**
+   * 正文根目录。可以传函数：数据目录变了以后，同一个存储要跟着写到新目录去
+   *（探针不用重启 Pi 就能跟上）。
+   */
+  root: string | (() => string);
+  log?: (message: string) => void;
+}
+
+export function createPayloadStore(options: PayloadStoreOptions): PayloadStore {
+  const rootOption = options.root;
+  const root = (): string => (typeof rootOption === "function" ? rootOption() : rootOption);
 
   return {
-    root: () => root,
+    root,
     onError: options.log,
     write(kind, sessionId, id, value) {
       let content: string;
@@ -51,7 +61,7 @@ export function createPayloadStore(options: { root: string; log?: (message: stri
 
       const relPath = payloadRelPath(kind, sessionId, id);
       try {
-        const bytes = writePayloadFile(root, relPath, content);
+        const bytes = writePayloadFile(root(), relPath, content);
         return { path: relPath, bytes };
       } catch (error) {
         options.log?.(`正文写入失败（${kind}/${id}）：${(error as Error).message}`);

@@ -1,9 +1,13 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 
 import { BACKOFF_STEPS_MS, backoffDelay, checkHealth, getSessionCursor, postBatch } from "../ext/client.ts";
-import { loadProbeConfig, defaultTokenFile } from "../ext/config.ts";
+import { loadProbeConfig, resolveProbeConfig, defaultTokenFile } from "../ext/config.ts";
 import { capText, capValue, jsonBytes } from "../ext/limit.ts";
+import { PROBE_CONFIG_VERSION, writeProbeFileConfig } from "../src/lib/probe-config.ts";
 import { PROBE_PROTOCOL_VERSION, type IngestBatch } from "../src/lib/protocol.ts";
 
 const batch: IngestBatch = {
@@ -123,7 +127,9 @@ test("checkHealth：可达返回 true，抛错返回 false", async () => {
 });
 
 test("探针配置：默认地址、批量与队列上限", () => {
-  const config = loadProbeConfig({});
+  // 用纯函数算默认值：loadProbeConfig 会去读真实数据目录里的 probe.json，
+  // 那台机器上有没有这个文件不该影响这个断言。
+  const config = resolveProbeConfig({}, null);
   assert.equal(config.baseUrl, "http://127.0.0.1:4173");
   assert.equal(config.ingestUrl, "http://127.0.0.1:4173/api/ingest");
   assert.equal(config.batchSize, 50);
@@ -134,6 +140,53 @@ test("探针配置：默认地址、批量与队列上限", () => {
   assert.ok(config.tokenFile === defaultTokenFile());
   assert.ok(config.tokenFile.endsWith(".pi-observer/token"), "令牌默认在工程外，和服务端同一个数据目录");
   assert.ok(config.payloadDir.endsWith(".pi-observer/payloads"), "正文目录跟着令牌走");
+});
+
+test("探针配置：环境变量 > 配置文件 > 默认值", () => {
+  const fileConfig = {
+    version: 1,
+    baseUrl: "http://127.0.0.1:52731",
+    tokenFile: "/data/token",
+    payloadDir: "/data/payloads",
+  };
+
+  // 只有配置文件
+  const fromFile = resolveProbeConfig({}, fileConfig);
+  assert.equal(fromFile.baseUrl, "http://127.0.0.1:52731");
+  assert.equal(fromFile.ingestUrl, "http://127.0.0.1:52731/api/ingest");
+  assert.equal(fromFile.healthUrl, "http://127.0.0.1:52731/api/health");
+  assert.equal(fromFile.tokenFile, "/data/token");
+  assert.equal(fromFile.payloadDir, "/data/payloads");
+
+  // 环境变量压过配置文件
+  const fromEnv = resolveProbeConfig(
+    {
+      PI_OBSERVER_URL: "http://127.0.0.1:9999",
+      PI_OBSERVER_TOKEN_FILE: "/tmp/token",
+      PI_OBSERVER_PAYLOAD_DIR: "/tmp/payloads",
+    },
+    fileConfig,
+  );
+  assert.equal(fromEnv.baseUrl, "http://127.0.0.1:9999");
+  assert.equal(fromEnv.tokenFile, "/tmp/token");
+  assert.equal(fromEnv.payloadDir, "/tmp/payloads");
+});
+
+test("探针配置：从数据目录里的 probe.json 读到服务地址", () => {
+  const dir = mkdtempSync(join(tmpdir(), "pi-observer-probe-cfg-"));
+  const tokenFile = join(dir, "token");
+  writeFileSync(tokenFile, "t\n", "utf8");
+  writeProbeFileConfig(join(dir, "probe.json"), {
+    version: PROBE_CONFIG_VERSION,
+    baseUrl: "http://127.0.0.1:53124",
+    tokenFile,
+    payloadDir: join(dir, "payloads"),
+  });
+
+  const config = loadProbeConfig({ PI_OBSERVER_TOKEN_FILE: tokenFile });
+  assert.equal(config.baseUrl, "http://127.0.0.1:53124");
+  assert.equal(config.tokenFile, tokenFile);
+  assert.equal(config.payloadDir, join(dir, "payloads"));
 });
 
 test("探针配置：环境变量可覆盖地址与上限", () => {

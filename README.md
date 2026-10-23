@@ -104,7 +104,7 @@ tools/              截图与验收脚本
 test/               单元测试
 docs/               PRD、技术选型、可行性验证
 prototype/          设计基准（静态稿）
-~/.pi-observer/     运行数据：observer.db、token、probe.log、探针游标、payloads/ 正文文件（工程外，不进 git）
+~/.pi-observer/     运行数据：observer.db、token、probe.json、probe.log、探针游标、payloads/ 正文文件（工程外，不进 git）
 ```
 
 ## 配置
@@ -131,6 +131,31 @@ prototype/          设计基准（静态稿）
 | `PI_OBSERVER_MAX_QUEUE_RECORDS` | `2000` | 队列条数上限 |
 | `PI_OBSERVER_DEBUG_REQUESTS` | 关闭 | 每次模型请求往日志写一行采集摘要 |
 | `PI_OBSERVER_DEBUG` | 关闭 | 同时把探针日志打到 stderr |
+
+### 探针怎么找到看板
+
+取值顺序是**环境变量 > 配置文件 > 内置默认值**。
+
+服务端每次启动都会把「我在哪」写进 `<数据目录>/probe.json`：
+
+```json
+{
+  "version": 1,
+  "baseUrl": "http://127.0.0.1:4173",
+  "tokenFile": "/Users/you/.pi-observer/token",
+  "payloadDir": "/Users/you/.pi-observer/payloads"
+}
+```
+
+探针启动时读这个文件，知道往哪个地址推数据、正文写到哪个目录。
+这个文件是给「服务不一定在 4173」的场景准备的——桌面版会自己挑一个空闲端口再写这个文件；
+环境变量仍然优先，因为它是人手动设的，比文件更明确。
+
+文件里的 `tokenFile` 与 `payloadDir` 保证探针和服务端指向同一份数据：两边不一致时，
+服务端读不到探针写的正文，只会在日志里打一条「正文目录不一致」的警告。
+
+探针在每个 Pi 会话开始时读一次配置；推送失败时还会再读一次——**地址变了就立刻换过去，不用重开 Pi 会话**。
+（换地址时退避会清零，不多等那几秒。）
 
 探针日志默认只写 `~/.pi-observer/probe.log`，**不进你的终端**：探针跑在 Pi 进程里，
 打到 stderr 会在你打开的每个项目里冒出一条与本项目无关的消息。

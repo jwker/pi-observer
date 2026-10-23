@@ -171,6 +171,7 @@ pi-observer/
 - `request_seq` / `run_seq` 写 `data/session-cursor/<会话哈希>.json`，只为跨 Pi 进程续跑时不覆盖旧请求与旧运行；不写 Pi 的会话文件。本地游标缺失时从看板的 `/api/sessions/:id/cursor` 取最大序号种子化。
 - 探针日志写 `~/.pi-observer/probe.log`（默认不打 stderr）：探针在用户的 Pi 进程里，打到 stderr 会污染他们自己项目的终端。
 - **运行数据必须在工程外**（`~/.pi-observer/`）：Turbopack 监听工程目录里的文件变化，而看板自己在往数据目录写正文、日志与 WAL。放在仓库里时每次写入都触发一次重编译，dev 下页面不停整页重载（实测每秒 2~6 次；移出去后 12 秒内 0 次）。
+- **探针与服务端靠 `probe.json` 认彼此**（2026-10-23）：服务端启动时把地址、令牌路径、正文目录写进 `<数据目录>/probe.json`，探针启动时读。环境变量只能由启动 Pi 的人设置，桌面程序没法给已经在跑的 Pi 注入环境变量，所以文件是必须的。取值顺序：环境变量 > 配置文件 > 默认值。探针每个会话开始时读一次配置；推送失败时再读一次，地址变了就立刻换过去并清零退避，所以改了配置不必重开 Pi 会话。
 - **不能在仓库里建 `data` 软链**：Turbopack 会跟随符号链接监听目标目录，「放在工程外」等于没做（实测软链方案下仍有十几次编译 / 5 秒）。
 - 探针不进入 Next 的构建范围，`ext/` 不是 `src/` 下的内容。
 
@@ -318,7 +319,7 @@ SSE 实现要点（已实测，附录 C.3）：
 | 开发 | `next dev -H 127.0.0.1 -p 4173` |
 | 生产 | `next build && next start -H 127.0.0.1 -p 4173` |
 | 监听 | 必须显式 `-H 127.0.0.1`（**Next 的 `dev` 与 `start` 默认都是 `0.0.0.0`**，官方 CLI 文档确认；已实测显式指定后只监听回环，附录 C.6） |
-| 数据目录 | `./data/`（`observer.db`、`token`），与代码分离，已被 `.gitignore` |
+| 数据目录 | `~/.pi-observer/`（`observer.db`、`token`、`probe.json`、`probe.log`、`payloads/`），在工程外 |
 | 探针加载 | `pi --extension /absolute/path/to/pi-observer/ext`（目录内 `index.ts` 为入口，已从 Pi 源码确认支持） |
 | 开机自启 | 默认不装；需要时给一份 `launchd` plist 模板（可选） |
 | 优雅退出 | `SIGINT` / `SIGTERM` 时关 SSE、`wal_checkpoint(TRUNCATE)`、关库 |
