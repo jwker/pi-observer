@@ -10,7 +10,8 @@ Pi 运行时数据的只读本地看板。
 - **单用户、单机**：服务固定监听回环地址，不提供账号体系，不做远程访问。
 - **不做会话管理**：不删除、不隐藏、不重命名 Pi 的会话。
 - **不推定**：取不到的字段在界面和数据里标「不可用」，不用默认值补齐。
-- **正文存文件**：完整正文（模型请求体、钩子事件、会话条目）写进 `data/payloads/`，数据库只留元信息与相对路径。看板不再往库里堆正文，数据库体积可以忽略。
+- **正文存文件**：完整正文（模型请求体、钩子事件、会话条目）写进 `~/.pi-observer/payloads/`，数据库只留元信息与相对路径。看板不再往库里堆正文，数据库体积可以忽略。
+- **运行数据放在工程外**：默认在 `~/.pi-observer/`。放在仓库里会被 Turbopack 的文件监听看到——看板自己在往里写正文、日志与 WAL，每次写入都触发一次重编译，dev 下页面会不停整页重载。
 - **不自动删数据**：没有保留期，到期也不清。容量由使用者自己控制：设置页能看到占用，变大了就自己导出或删除正文文件。
 - **令牌只保护写接口**：`/api/ingest` 与 `/api/backfill` 需要 `x-observer-token`；读接口不校验，因为服务只在回环地址上。
 
@@ -39,7 +40,7 @@ npm run dev
 # 打开 http://127.0.0.1:4173
 ```
 
-首次启动会建库并扫描 Pi 会话目录；`data/token` 在第一次调用写入接口时生成（权限 `0600`）。数据都放在 `data/`，已被 `.gitignore` 排除。
+首次启动会建库并扫描 Pi 会话目录；`~/.pi-observer/token` 在第一次调用写入接口时生成（权限 `0600`）。运行数据默认在 `~/.pi-observer/`（工程外），可用 `PI_OBSERVER_DATA_DIR` 改。
 
 生产方式：
 
@@ -103,7 +104,7 @@ tools/              截图与验收脚本
 test/               单元测试
 docs/               PRD、技术选型、可行性验证
 prototype/          设计基准（静态稿）
-data/               运行数据：observer.db、token、probe.log、探针游标、payloads/ 正文文件（不进 git）
+~/.pi-observer/     运行数据：observer.db、token、probe.log、探针游标、payloads/ 正文文件（工程外，不进 git）
 ```
 
 ## 配置
@@ -113,7 +114,7 @@ data/               运行数据：observer.db、token、probe.log、探针游�
 | 变量 | 默认 | 说明 |
 |:--|:--|:--|
 | `PORT` | `4173` | 监听端口，地址固定 `127.0.0.1` |
-| `PI_OBSERVER_DATA_DIR` | `./data` | 库与令牌所在目录 |
+| `PI_OBSERVER_DATA_DIR` | `~/.pi-observer` | 库与令牌所在目录（放在工程外，避免 dev 下被 Turbopack 当成源码变化） |
 | `PI_OBSERVER_SESSIONS_DIR` | `~/.pi/agent/sessions` | Pi 会话文件根目录 |
 | `PI_OBSERVER_INGEST_MAX_BYTES` | `2097152` | 单批请求体上限 |
 | `PI_OBSERVER_RECONCILE_DELAY_MS` | `3000` | `agent_settled` 后多久对账 |
@@ -123,17 +124,17 @@ data/               运行数据：observer.db、token、probe.log、探针游�
 | 变量 | 默认 | 说明 |
 |:--|:--|:--|
 | `PI_OBSERVER_URL` | `http://127.0.0.1:4173` | 看板地址 |
-| `PI_OBSERVER_TOKEN_FILE` | `<仓库>/data/token` | 令牌路径（按探针文件位置解析，不依赖 Pi 的 cwd） |
-| `PI_OBSERVER_PAYLOAD_DIR` | `<仓库>/data/payloads` | 正文文件根目录 |
+| `PI_OBSERVER_TOKEN_FILE` | `~/.pi-observer/token` | 令牌路径（不依赖 Pi 的 cwd） |
+| `PI_OBSERVER_PAYLOAD_DIR` | `~/.pi-observer/payloads` | 正文文件根目录（默认跟令牌同目录） |
 | `PI_OBSERVER_BATCH_SIZE` | `50` | 队列到多少条立即发送 |
 | `PI_OBSERVER_BATCH_INTERVAL_MS` | `300` | 定时发送间隔 |
 | `PI_OBSERVER_MAX_QUEUE_RECORDS` | `2000` | 队列条数上限 |
 | `PI_OBSERVER_DEBUG_REQUESTS` | 关闭 | 每次模型请求往日志写一行采集摘要 |
 | `PI_OBSERVER_DEBUG` | 关闭 | 同时把探针日志打到 stderr |
 
-探针日志默认只写 `data/probe.log`，**不进你的终端**：探针跑在 Pi 进程里，
+探针日志默认只写 `~/.pi-observer/probe.log`，**不进你的终端**：探针跑在 Pi 进程里，
 打到 stderr 会在你打开的每个项目里冒出一条与本项目无关的消息。
-用 `tail -f data/probe.log` 看；排查时才临时设 `PI_OBSERVER_DEBUG=1`。
+用 `tail -f ~/.pi-observer/probe.log` 看；排查时才临时设 `PI_OBSERVER_DEBUG=1`。
 
 ## API
 

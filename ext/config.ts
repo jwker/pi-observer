@@ -1,12 +1,14 @@
 /**
  * 探针侧配置。全部可用环境变量覆盖，默认值与 PRD §7.4 / C1 一致。
  *
- * 注意令牌路径的默认值：PRD §7.6 写的是「读 `./data/token`」，但那是相对于 Pi 的 cwd，
- * 而 Pi 通常跑在用户自己的项目目录里。这里改成「相对探针文件位置」，即 pi-observer 仓库下的
- * `data/token`，这样无论 Pi 在哪个目录启动都能找到。要覆盖就设 `PI_OBSERVER_TOKEN_FILE`。
+ * 令牌路径的默认值是 `~/.pi-observer/token`：
+ *   - 不能相对 Pi 的 cwd（Pi 通常跑在用户自己的项目目录里）；
+ *   - 也不放在 pi-observer 仓库里：看板服务在 dev 下会往数据目录持续写文件，
+ *     放在仓库里会被 Turbopack 当成源码变化 → 页面不停整页重载。
+ * 要覆盖就设 `PI_OBSERVER_TOKEN_FILE`（正文目录默认跟着它走）。
  */
+import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 
 export interface ProbeConfig {
   /** 看板服务基地址 */
@@ -48,7 +50,7 @@ function boolFromEnv(raw: string | undefined, fallback: boolean): boolean {
 
 /** 默认令牌路径：本文件位于 `<repo>/ext/`，令牌在 `<repo>/data/token` */
 export function defaultTokenFile(): string {
-  return fileURLToPath(new URL("../data/token", import.meta.url));
+  return join(homedir(), ".pi-observer", "token");
 }
 
 export function loadProbeConfig(env: Record<string, string | undefined> = process.env): ProbeConfig {

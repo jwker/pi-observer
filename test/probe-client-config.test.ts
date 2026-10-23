@@ -132,7 +132,8 @@ test("探针配置：默认地址、批量与队列上限", () => {
   assert.equal(config.debugRequests, false);
   assert.equal(config.debug, false, "默认不打 stderr，避免打扰用户的终端");
   assert.ok(config.tokenFile === defaultTokenFile());
-  assert.ok(config.tokenFile.endsWith("/data/token"));
+  assert.ok(config.tokenFile.endsWith(".pi-observer/token"), "令牌默认在工程外，和服务端同一个数据目录");
+  assert.ok(config.payloadDir.endsWith(".pi-observer/payloads"), "正文目录跟着令牌走");
 });
 
 test("探针配置：环境变量可覆盖地址与上限", () => {

@@ -37,12 +37,12 @@
 | C2 | 不显示流式正文：正文只在会话文件里，生成中显示「生成中」 |
 | C3 | 看板自有库用 `node:sqlite` |
 | C4 | 不做会话删除、隐藏、重命名等写操作 |
-| C5 | 正文存文件（`data/payloads/`），数据库只留元信息、相对路径与截短骨架；**不脱敏、不截断** |
+| C5 | 正文存文件（`~/.pi-observer/payloads/`），数据库只留元信息、相对路径与截短骨架；**不脱敏、不截断** |
 | C6 | 不自动删数据：没有保留期，容量由使用者自己控制（设置页能看到占用） |
 | C7 | 代码与文档纳入 git 版本控制 |
 | C8 | 应用形态 Next.js 16（App Router / Node Runtime）；`prototype/` 是设计产物，不作为产品代码 |
 | C9 | 看板是单页：`/` 左侧项目 / 会话，右侧时间线；请求与工具详情用弹窗 |
-| C10 | 正文只有一份：完整正文在 `data/payloads/`，库里只留路径与截短骨架 |
+| C10 | 正文只有一份：完整正文在 `~/.pi-observer/payloads/`，库里只留路径与截短骨架 |
 
 ---
 
@@ -259,7 +259,7 @@ Pi 的数据分散在两处，且没有统一界面：
 │  GET  /api/detail      行详情（按需取全文）             │
 │  GET  /api/stream      SSE 推送                        │
 │                                                      │
-│  node:sqlite（./data/observer.db）                     │
+│  node:sqlite（~/.pi-observer/observer.db）             │
 │    sessions / runs / turns / tool_calls /             │
 │    llm_requests / events / probe_status / messages    │
 └───────────────────────┬──────────────────────────────┘
@@ -329,7 +329,7 @@ Pi 的数据分散在两处，且没有统一界面：
   | 状态 | 处理 | 理由 |
   |:--|:--|:--|
   | 5xx / 408 / 429 / 网络错误 | 退回队首 + 退避重试 | 服务端或网络暂时不行 |
-  | 401 | 清除内存里缓存的令牌 + 退回队首 + 退避重试（首档 1s） | 服务端重新生成过 `data/token` 时，缓存的旧值会让每一批都失败；丢数据没有意义，重读令牌文件即可自愈 |
+  | 401 | 清除内存里缓存的令牌 + 退回队首 + 退避重试（首档 1s） | 服务端重新生成过令牌文件时，缓存的旧值会让每一批都失败；丢数据没有意义，重读令牌文件即可自愈 |
   | 404 / 405 | 退回队首 + 退避重试 | 路由不存在（探针指向了别的服务）或 dev 正在重编译该路由 |
   | 400 / 413 | 丢弃整批并计入 `dropped_count` | 形状 / 协议不对，或这批超过服务端 2 MB 上限，重发还是一样 |
 - **一条坏记录会毒掉整批**：`parseBatch` 是整批校验，`records[N]` 有一个字段不合法就整批拒。所以探针所有发射点都先判会话存在，`session_id` 不会出现空串。
@@ -343,7 +343,7 @@ Pi 的数据分散在两处，且没有统一界面：
 | 变量 | 默认值 | 说明 |
 |:--|:--|:--|
 | `PI_OBSERVER_URL` | `http://127.0.0.1:4173` | 服务基地址（推送与健康检查） |
-| `PI_OBSERVER_TOKEN_FILE` | `<repo>/data/token` | 令牌文件；相对探针文件位置，不受 Pi 的 cwd 影响 |
+| `PI_OBSERVER_TOKEN_FILE` | `~/.pi-observer/token` | 令牌文件；不受 Pi 的 cwd 影响 |
 | `PI_OBSERVER_BATCH_INTERVAL_MS` | `300` | 批量推送间隔 |
 | `PI_OBSERVER_BATCH_SIZE` | `50` | 队列达到多少条立即推送 |
 | `PI_OBSERVER_MAX_BATCH_RECORDS` | `200` | 单批最多条数 |
@@ -465,8 +465,8 @@ Pi 的数据分散在两处，且没有统一界面：
 
 三条落地约定（M3 → M4）：
 
-- 正文**不落库也不截断**：探针把完整请求体写成文件（`data/payloads/request/<会话>/<序号>.json`），批次里只带相对路径与原始字节数。文件是**原样的**（不脱敏），权限 0600、目录 0700。
-- `request_seq` 与 `run_seq` 由探针按会话维护，游标写在 `<repo>/data/session-cursor/<会话哈希>.json`；Pi 进程退出后用 `--resume` 打开同一会话时接着上次的序号，不会从 1 重置覆盖旧记录或旧运行。本地游标缺失时（第一次跑新版本、换了数据目录），探针从 `GET /api/sessions/:id/cursor` 取库里已用到的最大序号种子化。
+- 正文**不落库也不截断**：探针把完整请求体写成文件（`~/.pi-observer/payloads/request/<会话>/<序号>.json`），批次里只带相对路径与原始字节数。文件是**原样的**（不脱敏），权限 0600、目录 0700。
+- `request_seq` 与 `run_seq` 由探针按会话维护，游标写在 `~/.pi-observer/session-cursor/<会话哈希>.json`；Pi 进程退出后用 `--resume` 打开同一会话时接着上次的序号，不会从 1 重置覆盖旧记录或旧运行。本地游标缺失时（第一次跑新版本、换了数据目录），探针从 `GET /api/sessions/:id/cursor` 取库里已用到的最大序号种子化。
 - 请求开始时写正文路径（状态码为空），`after_provider_response` 到达时用同一 `(session_id, request_seq)` 补 `status` / `response_headers`；更新记录不带路径字段，服务端不会用空值覆盖。按顺序关联（`correlation = serial_assumed`）。
 
 **events**（时间线）
@@ -565,7 +565,7 @@ CREATE INDEX idx_jsonl_files_session ON jsonl_files(session_id);
 
 | 数据 | 处理 |
 |:--|:--|
-| `data/payloads/` 里的正文文件 | 不自动删。容量由使用者自己控制：设置页能看到占用，变大了自己导出或删对应会话的目录 |
+| `~/.pi-observer/payloads/` 里的正文文件 | 不自动删。容量由使用者自己控制：设置页能看到占用，变大了自己导出或删对应会话的目录 |
 | `sessions` / `runs` / `turns` / `tool_calls` / `messages` / `events` / `llm_requests` | 不自动删 |
 | `jsonl_files` | 不清理（读取进度，一行几十字节） |
 
@@ -717,9 +717,10 @@ SSE 事件类型：`session.updated`、`probe.status`。每条只带最小标识
 |:--|:--|:--|
 | 监听地址 | `127.0.0.1` | 固定回环，不监听 `0.0.0.0` |
 | 端口 | `4173` | 已确认。避开常用 3000 与 Pi 相关端口 |
-| 数据库 | `./data/observer.db` | 与 Pi 数据完全分离 |
+| 数据库 | `~/.pi-observer/observer.db` | 与 Pi 数据完全分离；**放在工程外**，否则 dev 下会被 Turbopack 当成源码变化而反复重编译 |
 | 会话目录 | `~/.pi/agent/sessions` | 可配置 |
-| 令牌 | `./data/token` | 首次启动生成，仅用于 `/api/ingest` |
+| 运行数据目录 | `~/.pi-observer` | 库、令牌、正文文件、探针日志都在这里；**必须放在工程外**（见下） |
+| 令牌 | `~/.pi-observer/token` | 首次启动生成，仅用于 `/api/ingest` |
 | 运行时 | Node ≥ 24 | `node:sqlite` 要求 |
 
 启动方式：
@@ -732,6 +733,10 @@ pi --extension /absolute/path/to/pi-observer/ext
 ```
 
 注意：Next 的 `dev` 与 `start` 默认监听 `0.0.0.0`，所以 `-H 127.0.0.1` 必须写进 `package.json` 脚本，不能只在文档里说明。端口用 `-p` 传，因为 `PORT` 环境变量对 Next 不生效（HTTP 服务器早于 `.env` 加载）。
+
+**运行数据目录必须在工程外**：Turbopack 会监听工程目录里的文件变化，而看板自己在往数据目录写正文、日志与 WAL
+（探针每几秒就写一次）。放在仓库里的话，每次写入都触发一次重编译，dev 下页面不停整页重载——实测每秒 2~6 次。
+放到 `~/.pi-observer/` 后，同一段时间内重编译次数为 0。
 
 ---
 

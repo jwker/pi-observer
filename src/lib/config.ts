@@ -52,7 +52,10 @@ export type EnvRecord = Record<string, string | undefined>;
 
 export function loadConfig(env: EnvRecord = process.env): Config {
   const cwd = process.cwd();
-  const dataDir = env.PI_OBSERVER_DATA_DIR?.trim() || join(cwd, "data");
+  // 数据目录默认放在**工程外**（~/.pi-observer）：
+  // 放在仓库里的 data/ 会被 Turbopack 的文件监听看到——看板自己在往里写正文、日志与 WAL，
+  // 每次写入都触发一次重编译，dev 下页面就会不停整页重载（实测每秒 2~6 次）。
+  const dataDir = env.PI_OBSERVER_DATA_DIR?.trim() || join(homedir(), ".pi-observer");
   const sessionsDir = env.PI_OBSERVER_SESSIONS_DIR?.trim() || join(homedir(), ".pi", "agent", "sessions");
 
   return {

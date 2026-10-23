@@ -8,8 +8,8 @@ test("默认配置：端口 4173、只监听 127.0.0.1、2 MB 批次上限", () 
   assert.equal(config.host, "127.0.0.1");
   assert.equal(config.port, 4173);
   assert.equal(config.ingestMaxBytes, 2 * 1024 * 1024);
-  assert.ok(config.dbPath.endsWith("data/observer.db"));
-  assert.ok(config.tokenPath.endsWith("data/token"));
+  assert.ok(config.dbPath.endsWith(".pi-observer/observer.db"), "数据目录默认在工程外");
+  assert.ok(config.tokenPath.endsWith(".pi-observer/token"));
   assert.ok(config.sessionsDir.endsWith(".pi/agent/sessions"));
 });
 

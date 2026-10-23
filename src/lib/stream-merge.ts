@@ -26,7 +26,9 @@ function mergeBy<T>(previous: T[], next: T[], key: (item: T) => string, sort: (a
 const byIndex = (a: TimelineMessageRow, b: TimelineMessageRow): number => a.entry_index - b.entry_index;
 const byTurn = (a: TurnRow, b: TurnRow): number =>
   a.run_seq - b.run_seq || a.turn_index - b.turn_index;
-const byEventId = (a: EventRow, b: EventRow): number => a.id - b.id;
+// 事件是倒序（最新的在前）：首屏与实时窗口都按 id 降序返回，合并后必须保持一致，
+// 否则第一次刷新就会把整列事件翻个儿，页面看起来在闪。
+const byEventId = (a: EventRow, b: EventRow): number => b.id - a.id;
 const byTool = (a: ToolCallIndexRow, b: ToolCallIndexRow): number =>
   (a.started_at ?? "").localeCompare(b.started_at ?? "");
 const byRequest = (a: RequestIndexRow, b: RequestIndexRow): number => b.request_seq - a.request_seq;

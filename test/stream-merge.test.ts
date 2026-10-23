@@ -37,6 +37,8 @@ test("合并：新的覆盖旧的，旧的留下", () => {
   assert.equal(merged.messages[0].text, "新", "同一条以新的为准");
   assert.equal(merged.messages[1].entry_id, "m2");
   assert.equal(merged.events.length, 2, "事件按 id 合并");
+  // 事件是倒序（最新在前）：合并后必须与首屏同序，否则第一次刷新就会把整列翻过来
+  assert.deepEqual(merged.events.map((e) => e.id), [2, 1], "事件保持倒序");
 });
 
 test("合并：按顺序排好", () => {

@@ -107,7 +107,7 @@ pi-observer/
   tools/acceptance/             验收脚本（档 A 离线 + 档 B 真实 Pi）
   test/                         node --test 用例
   public/                       静态资源
-  data/                         observer.db · token · probe.log · session-cursor/（已在 .gitignore）
+  ~/.pi-observer/                运行数据（工程外）：observer.db · token · probe.log · session-cursor/ · payloads/
   next.config.ts                含 agentRules: false（不让 Next 生成 AGENTS.md）
   tsconfig.json / package.json
 ```
@@ -169,7 +169,8 @@ pi-observer/
 - **正文不进批次**（2026-10-23）：探针把请求体与事件正文写成 `data/payloads/` 下的文件，批次里只带相对路径与字节数。好处是 2.9 MB 的请求体不会撑爆批次上限与内存队列；代价是探针与服务端必须在同一个数据目录（批次里带 `payload_root`，不一致时服务端记一条警告）。
 - 正文**不脱敏、不截断**，文件权限 0600、目录 0700；也不自动清理（占用在设置页可见）。
 - `request_seq` / `run_seq` 写 `data/session-cursor/<会话哈希>.json`，只为跨 Pi 进程续跑时不覆盖旧请求与旧运行；不写 Pi 的会话文件。本地游标缺失时从看板的 `/api/sessions/:id/cursor` 取最大序号种子化。
-- 探针日志写 `data/probe.log`（默认不打 stderr）：探针在用户的 Pi 进程里，打到 stderr 会污染他们自己项目的终端。
+- 探针日志写 `~/.pi-observer/probe.log`（默认不打 stderr）：探针在用户的 Pi 进程里，打到 stderr 会污染他们自己项目的终端。
+- **运行数据必须在工程外**（`~/.pi-observer/`）：Turbopack 监听工程目录里的文件变化，而看板自己在往数据目录写正文、日志与 WAL。放在仓库里时每次写入都触发一次重编译，dev 下页面不停整页重载（实测每秒 2~6 次；移出去后 12 秒内 0 次）。
 - 探针不进入 Next 的构建范围，`ext/` 不是 `src/` 下的内容。
 
 ---
