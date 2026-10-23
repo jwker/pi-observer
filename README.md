@@ -202,6 +202,7 @@ npm run verify   # check + accept
 
 ## 文档
 
+- `docs/help.md`：使用说明（怎么装、怎么用、数据在哪儿、常见问题）
 - `docs/prd-v0.2.md`：产品口径、数据来源、事件清单、页面与验收判据
 - `docs/tech-stack.md`：技术选型与版本约束
 - `docs/durable-feasibility.md`：可行性验证与实测数据
