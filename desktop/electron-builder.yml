@@ -1,0 +1,34 @@
+# electron-builder 的配置放在单独的文件里，不放 package.json：
+# package.json 会被各种工具重写（npm 就会），配置单独放不容易丢。
+appId: dev.pi-observer.desktop
+productName: pi-observer
+
+directories:
+  output: out
+
+# 只把主进程脚本打进 app.asar。服务产物与探针代码要用真实文件
+# （子进程要能直接读它们，asar 里的文件子进程读不了），所以走 extraResources。
+files:
+  - main.js
+  - package.json
+
+extraResources:
+  - from: resources
+    to: pi-observer
+
+mac:
+  category: public.app-category.developer-tools
+  darkModeSupport: true
+  target:
+    - target: dmg
+      arch:
+        - arm64
+
+dmg:
+  contents:
+    - x: 180
+      y: 220
+    - x: 460
+      y: 220
+      type: link
+      path: /Applications

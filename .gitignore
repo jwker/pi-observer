@@ -6,3 +6,7 @@ data
 *.log
 *.tsbuildinfo
 .DS_Store
+
+# 桌面版的构建产物与依赖
+desktop/resources/
+desktop/out/

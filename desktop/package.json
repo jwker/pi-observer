@@ -1,0 +1,18 @@
+{
+  "name": "pi-observer-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "pi-observer 的桌面外壳：拉起本地看板服务并开一个窗口",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "postinstall": "node ../tools/desktop/install-electron.mjs",
+    "prepare-resources": "node ../tools/desktop/prepare.mjs",
+    "pack": "node ../tools/desktop/prepare.mjs && electron-builder --mac dir",
+    "dmg": "node ../tools/desktop/prepare.mjs && electron-builder --mac dmg"
+  },
+  "devDependencies": {
+    "electron": "^45.0.0",
+    "electron-builder": "^26.0.0"
+  }
+}
