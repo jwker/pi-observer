@@ -10,7 +10,9 @@
  * 裁剪的依据：
  *   - `node_modules/@img` 是 Next 的图片优化二进制（18 MB），这个看板没有用
  *     `next/image`，删掉不影响任何页面；
- *   - `docs/` `test/` `tools/` `prototype/` 是仓库里的开发文件，服务运行时用不到；
+ *   - `docs/` `test/` `tools/` `desktop/` 是仓库里的开发文件，服务运行时用不到。
+ *     `desktop/` 尤其要删：standalone 产物会把整个工程目录拷进去，
+ *     而 desktop/ 里又有一份上一轮的产物，越拷越大（实测 399 MB）；
  *   - `ext/` 与 `src/` 要留着：探针要 import `../src/lib/protocol.ts` 与
  *     `payload-files.ts`，相对路径不能断。
  *
@@ -26,7 +28,7 @@ const REPO = join(HERE, "..", "..");
 const RESOURCES = join(REPO, "desktop", "resources");
 
 /** 删掉这些目录：运行时用不到 */
-const DROP_DIRS = ["docs", "test", "tools", "prototype", "probes"];
+const DROP_DIRS = ["docs", "test", "tools", "desktop"];
 
 function run(command, args) {
   const result = spawnSync(command, args, { stdio: ["ignore", "pipe", "pipe"], cwd: REPO });
@@ -51,6 +53,9 @@ const toMB = (bytes) => Number((bytes / (1024 * 1024)).toFixed(1));
 
 if (!process.argv.includes("--skip-build")) {
   console.log("== 构建 ==");
+  // 先删掉上一轮的打包产物：Next 的 standalone 产物会把整个工程目录拷进去，
+  // 而 desktop/out/ 里装着上一轮的 .app（几百 MB），不删的话每构建一次就大一轮。
+  rmSync(join(REPO, "desktop", "out"), { recursive: true, force: true });
   run("npm", ["run", "build"]);
 }
 

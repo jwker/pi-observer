@@ -99,11 +99,10 @@ src/app/            页面与 API 路由（Next.js App Router，全部 nodejs �
 src/components/     单页外壳、会话列表、时间线、详情弹窗
 src/lib/            协议契约、入库、回填、对账、查询、正文文件、差异、存储统计
 ext/                Pi 探针（扩展）源码
-probes/             一次性测量脚本，不参与运行时
-tools/              截图与验收脚本
+tools/              截图、诊断与验收脚本
 test/               单元测试
 docs/               PRD、技术选型、可行性验证
-prototype/          设计基准（静态稿）
+desktop/            桌面外壳（Electron）与打包脚本，不参与服务本身
 ~/.pi-observer/     运行数据：observer.db、token、probe.json、probe.log、探针游标、payloads/ 正文文件（工程外，不进 git）
 ```
 
@@ -206,6 +205,5 @@ npm run verify   # check + accept
 - `docs/prd-v0.2.md`：产品口径、数据来源、事件清单、页面与验收判据
 - `docs/tech-stack.md`：技术选型与版本约束
 - `docs/durable-feasibility.md`：可行性验证与实测数据
-- `prototype/`：视觉与交互基准
 - `tools/acceptance/README.md`：验收脚本细节
 - `AGENT.md`：协作约束（回答方式、git 策略）

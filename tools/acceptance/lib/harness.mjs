@@ -90,7 +90,7 @@ function newestSourceMtime() {
       }
     }
   };
-  for (const dir of ["src", "ext", "prototype"]) visit(join(REPO, dir));
+  for (const dir of ["src", "ext"]) visit(join(REPO, dir));
   for (const file of ["next.config.ts", "tsconfig.json", "package.json", "package-lock.json"]) {
     try {
       const mtime = statSync(join(REPO, file)).mtimeMs;
