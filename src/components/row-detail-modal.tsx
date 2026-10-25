@@ -89,7 +89,13 @@ export function RowDetailModal({ target, onClose }: RowDetailModalProps) {
   }, [onClose]);
 
   const fromFile = row.fromFile;
-  const sourceLabel = fromFile ? "来自文件" : kind === "request" ? "钩子记录" : "钩子事件";
+  const sourceLabel = fromFile
+    ? "来自文件"
+    : kind === "request"
+      ? row.kind === "response"
+        ? "钩子响应"
+        : "钩子记录"
+      : "钩子事件";
   const title = modalTitle(row);
   const relatedCount =
     (detail?.relatedEvents.length ?? 0) +
@@ -145,7 +151,7 @@ export function RowDetailModal({ target, onClose }: RowDetailModalProps) {
               {tab === "diff" && detail.request !== null ? (
                 <RequestDiff sessionId={sessionId} requestSeq={detail.request.request_seq} />
               ) : null}
-              {tab === "related" ? <RelatedPanel detail={detail} /> : null}
+              {tab === "related" ? <RelatedPanel row={row} detail={detail} /> : null}
             </>
           ) : null}
         </div>
@@ -177,13 +183,23 @@ function DetailMeta({ row, detail }: { row: StreamRow; detail: RowDetailData | n
     items.push(["参数 / 结果", `${formatBytes(detail.tool.args_bytes)} / ${formatBytes(detail.tool.result_bytes)}`]);
     items.push(["时间", dateTime(detail.tool.started_at ?? detail.tool.ended_at)]);
   } else if (detail?.request !== null && detail?.request !== undefined) {
-    items.push(["会话内序号", String(detail.request.request_seq)]);
-    items.push(["provider", detail.request.provider ?? "—"]);
-    items.push(["api", detail.request.api ?? "—"]);
-    items.push(["model", detail.request.model ?? "—"]);
-    items.push(["payload", `${formatBytes(detail.request.payload_bytes)}（正文在文件里）`]);
-    items.push(["响应", detail.request.status === null ? "未到达" : String(detail.request.status)]);
-    items.push(["时间", dateTime(detail.request.created_at)]);
+    if (row.kind === "response") {
+      // 响应行：头部也讲响应
+      items.push(["请求序号", `#${detail.request.request_seq}`]);
+      items.push(["状态", detail.request.status === null ? "未到达" : String(detail.request.status)]);
+      items.push(["耗时", row.durationMs === null ? "—" : formatDuration(row.durationMs)]);
+      items.push(["provider", detail.request.provider ?? "—"]);
+      items.push(["model", detail.request.model ?? "—"]);
+      items.push(["时间", dateTime(row.at)]);
+    } else {
+      items.push(["会话内序号", String(detail.request.request_seq)]);
+      items.push(["provider", detail.request.provider ?? "—"]);
+      items.push(["api", detail.request.api ?? "—"]);
+      items.push(["model", detail.request.model ?? "—"]);
+      items.push(["payload", `${formatBytes(detail.request.payload_bytes)}（正文在文件里）`]);
+      items.push(["响应", detail.request.status === null ? "未到达" : String(detail.request.status)]);
+      items.push(["时间", dateTime(detail.request.created_at)]);
+    }
   } else if (detail?.event !== null && detail?.event !== undefined) {
     items.push(["event_id", detail.event.event_id]);
     items.push(["event_type", detail.event.event_type]);
@@ -221,6 +237,10 @@ function ContentPanel({ row, detail }: { row: StreamRow; detail: RowDetailData }
     return <ToolContent tool={detail.tool} relatedMessages={detail.relatedMessages} />;
   }
   if (detail.request !== null) {
+    // 响应行：主体讲响应，请求体放到「关联」页签去
+    if (row.kind === "response") {
+      return <ResponseContent row={row} request={detail.request} detail={detail} />;
+    }
     return <RequestContent request={detail.request} />;
   }
   if (detail.event !== null) {
@@ -347,6 +367,68 @@ function textOfToolResult(payload: unknown): string | null {
   return parts.length > 0 ? parts.join("\n") : null;
 }
 
+/**
+ * 响应行的内容。
+ *
+ * 响应本身没有正文可显示：Pi 的 `after_provider_response` 钩子只给状态码与响应头，
+ * 探针也只取这两个（见 ext/index.ts）。所以这里讲的是「响应到了没有、多久、回了什么头」，
+ * 请求体不在主体里——它放到「关联」页签，需要时再翻。
+ */
+function ResponseContent({
+  row,
+  request,
+  detail,
+}: {
+  row: StreamRow;
+  request: RequestDetail;
+  detail: RowDetailData;
+}) {
+  const responseEvent = detail.relatedEvents.find((event) => event.event_type === "provider_response");
+
+  return (
+    <>
+      <SectionLabel>概览</SectionLabel>
+      <dl className="kv" style={{ marginBottom: 12 }}>
+        <dt>状态</dt>
+        <dd>{request.status === null ? "未到达" : String(request.status)}</dd>
+        <dt>耗时</dt>
+        <dd>{row.durationMs === null ? "—" : formatDuration(row.durationMs)}</dd>
+        <dt>请求序号</dt>
+        <dd>#{request.request_seq}</dd>
+        <dt>provider</dt>
+        <dd>{request.provider ?? "—"}</dd>
+        <dt>model</dt>
+        <dd>{request.model ?? "—"}</dd>
+        <dt>token</dt>
+        <dd>
+          {request.tokens_in === null ? "—" : `↑ ${formatTokens(request.tokens_in)}`} /{" "}
+          {request.tokens_out === null ? "—" : `↓ ${formatTokens(request.tokens_out)}`}
+        </dd>
+        <dt>时间</dt>
+        <dd>{dateTime(row.at)}</dd>
+      </dl>
+
+      <div className="notice" style={{ marginBottom: 12 }}>
+        <span className="ic">◌</span>
+        <div>
+          响应<b>没有正文</b>：Pi 的钩子只给状态码与响应头，看板没有采集模型的原始输出。
+          模型的回答在时间线的「助手」行里（来自会话文件）；这次的请求体在「关联」页签。
+        </div>
+      </div>
+
+      <SectionLabel>响应头（未脱敏）</SectionLabel>
+      <pre className="pre">{pretty(request.response_headers)}</pre>
+
+      {responseEvent !== undefined ? (
+        <>
+          <SectionLabel>响应事件</SectionLabel>
+          <pre className="pre">{pretty(responseEvent.payload)}</pre>
+        </>
+      ) : null}
+    </>
+  );
+}
+
 function RequestContent({ request }: { request: RequestDetail }) {
   return (
     <>
@@ -443,8 +525,15 @@ function RawPanel({ row, detail }: { row: StreamRow; detail: RowDetailData }) {
       (message) => message.entry_id === detail.tool?.result_entry_id,
     );
     value = resultEntry?.payload ?? detail.tool.result ?? detail.tool.args;
-  } else if (detail.request !== null) value = detail.request.payload;
-  else if (detail.event !== null) value = detail.event.payload;
+  } else if (detail.request !== null) {
+    // 响应行：原始 JSON 是响应事件自己的载荷（状态与响应头名单），不是请求体
+    if (row.kind === "response") {
+      const responseEvent = detail.relatedEvents.find((event) => event.event_type === "provider_response");
+      value = responseEvent?.payload ?? detail.request.payload;
+    } else {
+      value = detail.request.payload;
+    }
+  } else if (detail.event !== null) value = detail.event.payload;
 
   return (
     <>
@@ -456,9 +545,15 @@ function RawPanel({ row, detail }: { row: StreamRow; detail: RowDetailData }) {
   );
 }
 
-function RelatedPanel({ detail }: { detail: RowDetailData }) {
+function RelatedPanel({ row, detail }: { row: StreamRow; detail: RowDetailData }) {
+  // 响应行的请求体不在主体里，放到这里
+  const requestBody =
+    row.kind === "response" && detail.request !== null ? detail.request : null;
   const hasAny =
-    detail.relatedEvents.length > 0 || detail.relatedTools.length > 0 || detail.relatedRequest !== null;
+    detail.relatedEvents.length > 0 ||
+    detail.relatedTools.length > 0 ||
+    detail.relatedRequest !== null ||
+    requestBody !== null;
   if (!hasAny) {
     return <div className="empty">这一条没有直接关联的钩子事件、请求或工具。</div>;
   }
@@ -505,6 +600,20 @@ function RelatedPanel({ detail }: { detail: RowDetailData }) {
           </div>
         </div>
       ) : null}
+
+      {requestBody !== null ? (
+        <div className="panel">
+          <div className="panel-head">
+            <span>请求体 · #{requestBody.request_seq}</span>
+            <span className="count">{requestBody.model ?? "—"}</span>
+          </div>
+          <div className="panel-body">
+            <pre className="pre" style={{ margin: 0 }}>
+              {pretty(requestBody.payload)}
+            </pre>
+          </div>
+        </div>
+      ) : null}
     </>
   );
 }
@@ -518,7 +627,9 @@ function modalTitle(row: StreamRow): string {
     case "tool":
       return `${row.toolName ?? "工具"} · ${shortId(row.toolCallId ?? "")}`;
     case "request":
-      return `请求 #${row.requestSeq} · ${row.label}`;
+      return row.kind === "response"
+        ? `响应 #${row.requestSeq} · ${row.label}`
+        : `请求 #${row.requestSeq} · ${row.label}`;
     case "event":
       return `${row.label} · ${shortId(row.eventId ?? "")}`;
     default:
@@ -530,7 +641,10 @@ function footNote(row: StreamRow): string {
   if (row.fromFile) {
     return "来自会话文件。正文、思考与工具参数都从这里取；存储去重后这是唯一一份。";
   }
-  if (row.kind === "request" || row.kind === "response") {
+  if (row.kind === "response") {
+    return "响应来自钩子：Pi 只给状态码与响应头，没有正文。请求体在「关联」页签，原样存在看板的数据目录里（不脱敏、不截断、也不自动清理），不改动 Pi 的文件。";
+  }
+  if (row.kind === "request") {
     return "请求与响应来自钩子；请求体原样存在看板的数据目录里（不脱敏、不截断、也不自动清理），不改动 Pi 的文件。";
   }
   return "钩子事件只补文件里没有的信息：运行状态、工具起止、请求与响应。";
