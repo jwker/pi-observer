@@ -8,8 +8,8 @@
     "start": "electron .",
     "postinstall": "node ../tools/desktop/install-electron.mjs",
     "prepare-resources": "node ../tools/desktop/prepare.mjs",
-    "pack": "node ../tools/desktop/prepare.mjs && electron-builder --mac dir",
-    "dmg": "node ../tools/desktop/prepare.mjs && electron-builder --mac dmg"
+    "pack": "node ../tools/desktop/prepare.mjs && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac dir",
+    "dmg": "node ../tools/desktop/prepare.mjs && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac dmg"
   },
   "devDependencies": {
     "electron": "^45.0.0",

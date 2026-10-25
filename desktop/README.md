@@ -55,23 +55,26 @@ npm start
 
 ```bash
 cd desktop
+
+# 两个镜像都要设，否则下载 Electron 或打包工具会卡在 GitHub 上
+ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/ \
+ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/ \
 npm run dmg
 ```
 
 产物在 `desktop/out/pi-observer-0.1.0-arm64.dmg`（约 118 MB，装上后 286 MB）。
 
-打包用国内镜像（两个都要）：
-
-```bash
-ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/ \
-ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/ \
-npx electron-builder --mac dmg
-```
-
 几点说明：
 
-- **没有签名也没有公证**。自己机器上双击能开；给别人装的话 Gatekeeper 会拦，
-  要签名与公证（需要 Apple 开发者账号）。
+- **默认不签名**（脚本里设了 `CSC_IDENTITY_AUTO_DISCOVERY=false`）。
+  自己构建、自己安装的应用没有隔离属性，macOS 不会拦，双击就开。
+- **别让 electron-builder 自动找证书**。钥匙串里通常有一张 "Apple Development"
+  开发证书（Xcode 装的时候发的），自动发现它之后 electron-builder 会拿它去签名，
+  然后卡在「要 provisioning profile / 钥匙串授权」那一步——表现就是构建不动了。
+  开发证书本来也不能用来分发，所以直接跳过签名。
+- **要真正分发**（给别人装、免掉 Gatekeeper 提示）需要付费的 Apple Developer Program：
+  拿 "Developer ID Application" 证书签名，再做公证。届时把脚本里的
+  `CSC_IDENTITY_AUTO_DISCOVERY=false` 去掉，并用 `CSC_LINK` 指向证书文件。
 - **图标是自己画的**（`build/icon.svg` → `build/icon.icns`）：
   深色底板上一条蓝色的活动流，末尾一颗绿点表示「正在跑」。
   改了 SVG 之后重新生成 `.icns` 的步骤见下。
