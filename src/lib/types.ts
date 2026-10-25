@@ -246,7 +246,7 @@ export interface RowDetailData {
   message: MessageDetail | null;
   /** 工具调用（含完整参数与结果） */
   tool: ToolCallDetail | null;
-  /** 请求（含脱敏 payload 与响应头） */
+  /** 请求（原样的 payload 与响应头，均未脱敏） */
   request: RequestDetail | null;
   /** 单条钩子事件 */
   event: EventRow | null;

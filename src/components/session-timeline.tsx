@@ -460,7 +460,7 @@ function TimelineRow({
             ) : null}
             {row.kind === "request" ? (
               <div className="faint" style={{ fontSize: 10 }}>
-                请求 #{row.requestSeq} · {formatBytes(row.payloadBytes)}（脱敏）
+                请求 #{row.requestSeq} · {formatBytes(row.payloadBytes)}（未脱敏）
               </div>
             ) : null}
             {row.kind === "response" ? (

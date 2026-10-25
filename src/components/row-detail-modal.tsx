@@ -367,10 +367,10 @@ function RequestContent({ request }: { request: RequestDetail }) {
         <dd className="faint">请求 / 响应按会话内顺序配对，没有共享请求 ID。</dd>
       </dl>
 
-      <SectionLabel>请求体（脱敏）</SectionLabel>
+      <SectionLabel>请求体（未脱敏）</SectionLabel>
       <pre className="pre">{pretty(request.payload)}</pre>
 
-      <SectionLabel>响应头（脱敏）</SectionLabel>
+      <SectionLabel>响应头（未脱敏）</SectionLabel>
       <pre className="pre">{pretty(request.response_headers)}</pre>
     </>
   );
