@@ -220,13 +220,14 @@ code, kbd, pre { font-family: var(--mono); }
 
 .brand {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 8px;
   font-size: 13px;
   font-weight: 600;
   color: var(--fg);
 }
-.brand .dot { color: var(--green); }
+/* 品牌标记：应用图标的符号版，和文字基线居中对齐 */
+.brand-mark { width: 18px; height: 18px; flex: none; }
 .brand .sub { font-size: 10px; letter-spacing: .1em; text-transform: uppercase; color: var(--fg-3); font-weight: 400; }
 
 .nav { display: flex; align-items: center; gap: 2px; }

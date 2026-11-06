@@ -2,59 +2,45 @@
   <!--
     pi-observer 应用图标。
 
-    画的是一条「运行时的活动流」：平段是空闲，中间几次起伏是模型请求与工具调用，
-    末尾那颗绿点是「现在正在跑」。配色跟看板的深色主题一致：
-    背景 #151a20 → #0b0d10，波形用强调蓝 #5aa9ff，活跃点用 #41b558。
+    与界面顶栏的品牌标记（src/renderer/src/components/logo.tsx）是同一套形状，
+    只是加了深色底板、按比例放大：两条对话气泡加一颗星。
+    蓝气泡是用户的提问，灰气泡是 agent 的回答，蓝星是「AI 参与」的标记。
+
+    这里用 <g transform> 把标记的 24×24 坐标系映射到画布上（平移 171.5/137，
+    缩放 30），所以里面的坐标和 logo.tsx 完全一致——改一边记得同步另一边。
+
+    配色沿界面主题：底板 #202834 → #0a0c0f，气泡蓝 #5aa9ff，灰 #c9d3dd。
+    尺寸按 macOS 的规矩：画布 1024，圆角 228（约 22.3%）。
   -->
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#1b212a"/>
-      <stop offset="1" stop-color="#0b0d10"/>
+      <stop offset="0" stop-color="#202834"/>
+      <stop offset="1" stop-color="#0a0c0f"/>
     </linearGradient>
-    <linearGradient id="stroke" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0" stop-color="#5aa9ff" stop-opacity="0.65"/>
-      <stop offset="0.45" stop-color="#5aa9ff"/>
-      <stop offset="1" stop-color="#7cc0ff"/>
+    <linearGradient id="sheen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.07"/>
+      <stop offset="0.55" stop-color="#ffffff" stop-opacity="0"/>
     </linearGradient>
-    <filter id="glow" x="-30%" y="-60%" width="160%" height="220%">
-      <feGaussianBlur stdDeviation="18" result="blur"/>
-      <feMerge>
-        <feMergeNode in="blur"/>
-        <feMergeNode in="SourceGraphic"/>
-      </feMerge>
-    </filter>
-    <filter id="dotGlow" x="-120%" y="-120%" width="340%" height="340%">
-      <feGaussianBlur stdDeviation="18" result="blur"/>
-      <feMerge>
-        <feMergeNode in="blur"/>
-        <feMergeNode in="SourceGraphic"/>
-      </feMerge>
-    </filter>
   </defs>
 
   <!-- 底板 -->
-  <rect x="0" y="0" width="1024" height="1024" rx="228" fill="url(#bg)"/>
-  <rect x="14" y="14" width="996" height="996" rx="216" fill="none" stroke="#d7dee6" stroke-opacity="0.08" stroke-width="6"/>
+  <rect width="1024" height="1024" rx="228" fill="url(#bg)"/>
+  <rect width="1024" height="560" rx="228" fill="url(#sheen)"/>
+  <rect x="15" y="15" width="994" height="994" rx="215" fill="none"
+        stroke="#d7dee6" stroke-opacity="0.10" stroke-width="7"/>
 
-  <!-- 背景里的时间轴刻度：淡淡的几条横线，暗示「时间线」 -->
-  <g stroke="#d7dee6" stroke-opacity="0.05" stroke-width="4">
-    <line x1="150" y1="352" x2="874" y2="352"/>
-    <line x1="150" y1="512" x2="874" y2="512"/>
-    <line x1="150" y1="672" x2="874" y2="672"/>
+  <!-- 品牌标记：24×24 坐标系，缩放 30 倍 -->
+  <g transform="translate(171.5 137) scale(30)">
+    <!-- 第一条：用户提问（带尾巴） -->
+    <rect x="1.5" y="3.5" width="12.5" height="6.5" rx="3.25" fill="#5aa9ff"/>
+    <path d="M4 10 L4 12.4 L6.6 10 Z" fill="#5aa9ff"/>
+
+    <!-- 第二条：agent 的回答（带尾巴） -->
+    <rect x="1.5" y="12.6" width="10" height="6.5" rx="3.25" fill="#c9d3dd" fill-opacity="0.58"/>
+    <path d="M4 19.1 L4 21.5 L6.6 19.1 Z" fill="#c9d3dd" fill-opacity="0.58"/>
+
+    <!-- AI 标记 -->
+    <path d="M17.6 3.4 C18 5.3 18.4 5.7 20.3 6.1 C18.4 6.5 18 6.9 17.6 8.8 C17.2 6.9 16.8 6.5 14.9 6.1 C16.8 5.7 17.2 5.3 17.6 3.4 Z"
+          fill="#5aa9ff"/>
   </g>
-
-  <!-- 活动流 -->
-  <path
-    d="M 186 512 L 276 512 L 306 470 L 336 556 L 366 512 L 466 512
-       L 498 416 L 530 608 L 562 512 L 662 512 L 692 470 L 722 556 L 752 512 L 806 512"
-    fill="none"
-    stroke="url(#stroke)"
-    stroke-width="36"
-    stroke-linecap="round"
-    stroke-linejoin="round"
-    filter="url(#glow)"
-  />
-
-  <!-- 正在跑：末尾的绿点 -->
-  <circle cx="812" cy="512" r="30" fill="#41b558" filter="url(#dotGlow)"/>
 </svg>

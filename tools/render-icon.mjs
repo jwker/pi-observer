@@ -2,7 +2,10 @@
  * 把 `build/icon.svg` 渲染成 macOS 的 `.icns`。
  *
  * 为什么需要这个脚本：macOS 自带的 `sips` 不读 SVG，`iconutil` 只吃 PNG。
- * 中间这一步用无头 Chrome 渲染（仓库里 `tools/shot.mjs` 也是这个路子）。
+ * 中间这一步用无头 Chrome 渲染。
+ *
+ * 透明背景是关键：macOS 图标是圆角矩形，圆角外的部分必须透明，
+ * 否则在 Dock 里会看到一个白角方块。
  *
  * 依赖：Google Chrome（/Applications/Google Chrome.app）、sips、iconutil。
  *
@@ -90,9 +93,15 @@ await send("Emulation.setDeviceMetricsOverride", {
   deviceScaleFactor: 1,
   mobile: false,
 });
+// 背景必须显式设成透明：Chrome 页面的默认背景是不透明白色，
+// 只靠 captureScreenshot 的 omitBackground 不够——不给 html/body 设
+// transparent、不覆盖默认背景色的话，圆角外的区域会是白的（旧图标就是这个毛病）。
+await send("Emulation.setDefaultBackgroundColorOverride", {
+  color: { r: 0, g: 0, b: 0, a: 0 },
+});
 const svg = readFileSync(SVG, "utf8");
 await send("Page.navigate", {
-  url: `data:text/html,<html><body style="margin:0">${svg.replace(/#/g, "%23")}</body></html>`,
+  url: `data:text/html,<html style="background:transparent"><body style="margin:0;background:transparent">${svg.replace(/#/g, "%23")}</body></html>`,
 });
 await delay(1200);
 const shot = await send("Page.captureScreenshot", { format: "png", omitBackground: true });

@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from "react";
 
+import { Logo } from "./logo.tsx";
+
 type Theme = "dark" | "light";
 
 const THEME_KEY = "pi-observer-theme";
@@ -45,7 +47,9 @@ export function TopBar() {
     <div className="topbar">
       <div className="topbar-inner">
         <div className="brand">
-          <span className="dot">●</span>pi-observer <span className="sub">会话文件</span>
+          <Logo />
+          <span>pi-observer</span>
+          <span className="sub">会话文件</span>
         </div>
         <div className="spacer" />
         <button
