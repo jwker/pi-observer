@@ -4,8 +4,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { buildSessionStream, turnWindow } from "../src/lib/stream.ts";
-import type { RequestRef, TimelineEntry } from "../src/lib/types.ts";
+import { buildSessionStream, turnWindow } from "../src/main/lib/stream.ts";
+import type { RequestRef, TimelineEntry } from "../src/shared/types.ts";
 
 function entry(partial: Partial<TimelineEntry> & { entry_id: string }): TimelineEntry {
   return {

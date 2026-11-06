@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { parseSessionFile } from "../src/lib/session-parse.ts";
+import { parseSessionFile } from "../src/main/lib/session-parse.ts";
 
 const line = (value: unknown): string => `${JSON.stringify(value)}\n`;
 

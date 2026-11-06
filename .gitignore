@@ -1,12 +1,10 @@
 node_modules/
-.next/
+# electron-vite 的构建产物
 out/
+# electron-builder 的打包产物
+dist/
 data
 .ai/
 *.log
 *.tsbuildinfo
 .DS_Store
-
-# 桌面版的构建产物与依赖
-desktop/resources/
-desktop/out/

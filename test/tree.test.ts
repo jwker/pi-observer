@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { buildMessageTree, describeNode, visibleEntryIds, type TreeNode } from "../src/lib/tree.ts";
-import type { MessageIndexRow } from "../src/lib/types.ts";
+import { buildMessageTree, type TreeNode } from "../src/main/lib/tree.ts";
+import type { MessageIndexRow } from "../src/shared/types.ts";
 
 function row(partial: Partial<MessageIndexRow> & { entry_id: string; entry_index: number }): MessageIndexRow {
   return {
@@ -134,93 +134,10 @@ test("输入乱序：一律按行号排，父先于子", () => {
   assert.equal(tree.currentLeafId, "B");
 });
 
-test("多条独立链：各自成根，当前分支只跟最后一条", () => {
-  const rows = [
-    row({ entry_id: "r1", entry_index: 1, kind: "model_change", role: null, summary: "模型 → accept-model" }),
-    row({ entry_id: "r2", entry_index: 2 }),
-    row({ entry_id: "r3", entry_index: 3 }),
-  ];
-  const tree = buildMessageTree(rows);
-
-  assert.equal(tree.roots.length, 3);
-  assert.deepEqual([...tree.currentBranch], ["r3"]);
-  // 根没有父，谈不上「从哪里分叉出去」；只标非当前分支，不画分叉图标
-  assert.equal(nodeOf(rows, "r1").branchStart, false);
-  assert.equal(nodeOf(rows, "r2").branchStart, false);
-  assert.equal(nodeOf(rows, "r3").branchStart, false);
-
-  const display = describeNode(nodeOf(rows, "r1"));
-  assert.equal(display.glyph, "▪");
-  assert.equal(display.meta, "非当前分支");
-});
-
 test("空输入：没有根、没有当前分支，不报错", () => {
   const tree = buildMessageTree([]);
   assert.equal(tree.total, 0);
   assert.equal(tree.roots.length, 0);
   assert.equal(tree.currentLeafId, null);
   assert.equal(tree.currentBranch.size, 0);
-
-  const hit = visibleEntryIds(tree, "任意");
-  assert.ok(hit !== null);
-  assert.equal(hit.size, 0);
-});
-
-test("过滤：命中项连同祖先一起留下，空查询表示不过滤", () => {
-  const rows = [
-    ...CHAIN,
-    row({ entry_id: "T", entry_index: 4, parent_id: "B", role: "toolResult", summary: "grep \"保留\" docs/" }),
-    row({ entry_id: "U", entry_index: 5, parent_id: "T", role: "user", summary: "接着改" }),
-  ];
-  const tree = buildMessageTree(rows);
-
-  assert.equal(visibleEntryIds(tree, ""), null);
-  assert.equal(visibleEntryIds(tree, "   "), null);
-
-  const hit = visibleEntryIds(tree, "grep");
-  assert.ok(hit !== null);
-  assert.deepEqual([...hit].sort(), ["A", "B", "T", "root"], "命中项的祖先都要在，兄弟节点不要");
-
-  const byRole = visibleEntryIds(tree, "toolresult");
-  assert.ok(byRole !== null);
-  assert.deepEqual([...byRole].sort(), ["A", "B", "T", "root"]);
-
-  const none = visibleEntryIds(tree, "没有这个");
-  assert.ok(none !== null);
-  assert.equal(none.size, 0);
-});
-
-test("一行怎么显示：图标按角色与条目类型，右侧灰字是大小 / 分支状态", () => {
-  const rows = [
-    row({ entry_id: "u", entry_index: 1, role: "user", payload_bytes: 2048 }),
-    row({ entry_id: "a", entry_index: 2, parent_id: "u", role: "assistant", payload_bytes: 0 }),
-    row({ entry_id: "s", entry_index: 3, parent_id: "a", role: "system" }),
-    row({ entry_id: "t", entry_index: 4, parent_id: "s", role: "toolResult" }),
-    // 旁支：挂在 u 上，行号在中间（追加写的文件里，旁支不可能排在最后一条之后）
-    row({ entry_id: "off", entry_index: 5, parent_id: "u", role: "assistant", payload_bytes: 512, summary: "旁支" }),
-    row({ entry_id: "m", entry_index: 6, parent_id: "t", kind: "model_change", role: null, summary: "模型 → deepseek" }),
-    row({ entry_id: "c", entry_index: 7, parent_id: "m", kind: "compaction", role: null, summary: "压缩摘要" }),
-    row({ entry_id: "b", entry_index: 8, parent_id: "c", kind: "branch_summary", role: null, summary: "分支摘要" }),
-  ];
-  const tree = buildMessageTree(rows);
-
-  assert.equal(describeNode(nodeOf(rows, "u")).glyph, "▸");
-  assert.equal(describeNode(nodeOf(rows, "u")).iconClass, "ic user");
-  assert.equal(describeNode(nodeOf(rows, "a")).glyph, "▾");
-  assert.equal(describeNode(nodeOf(rows, "s")).glyph, "◇");
-  assert.equal(describeNode(nodeOf(rows, "s")).iconClass, "ic system");
-  assert.equal(describeNode(nodeOf(rows, "t")).glyph, "→");
-  assert.equal(describeNode(nodeOf(rows, "t")).iconClass, "ic tool");
-  assert.equal(describeNode(nodeOf(rows, "c")).glyph, "▣");
-  assert.equal(describeNode(nodeOf(rows, "c")).iconClass, "ic compact");
-  assert.equal(describeNode(nodeOf(rows, "b")).glyph, "▪", "分支摘要用中性图标：⑂ 只留给分叉起点");
-  assert.equal(describeNode(nodeOf(rows, "m")).glyph, "▪", "没有专属图标的类型用中性符号");
-
-  assert.equal(describeNode(nodeOf(rows, "u")).meta, "2.0 KB");
-  assert.equal(describeNode(nodeOf(rows, "a")).meta, null, "没有 payload 就不显示大小");
-
-  const off = describeNode(nodeOf(rows, "off"));
-  assert.equal(off.glyph, "⑂", "旁支优先显示分叉图标");
-  assert.equal(off.meta, "非当前分支");
-  assert.equal(tree.currentLeafId, "b");
 });

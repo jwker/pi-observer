@@ -7,15 +7,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { config, setConfig } from "../src/lib/config.ts";
+import { config, setConfig } from "../src/main/lib/config.ts";
 import {
   listRequestFiles,
   matchRequests,
   parseRequestFileName,
   requestFileName,
   requestFileSize,
-} from "../src/lib/request-store.ts";
-import type { ParsedEntry } from "../src/lib/session-parse.ts";
+} from "../src/main/lib/request-store.ts";
+import type { ParsedEntry } from "../src/main/lib/session-parse.ts";
 
 function entry(partial: Partial<ParsedEntry> & { entry_id: string }): ParsedEntry {
   return {

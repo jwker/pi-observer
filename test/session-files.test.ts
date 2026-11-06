@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { listSessionPaths, listSessionMeta, readSessionMeta } from "../src/lib/session-files.ts";
+import { listSessionPaths, listSessionMeta, readSessionMeta } from "../src/main/lib/session-files.ts";
 
 const line = (value: unknown): string => `${JSON.stringify(value)}\n`;
 
