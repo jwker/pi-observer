@@ -11,9 +11,12 @@ directories:
 
 # 主进程与 preload 打进 app.asar；渲染进程的静态文件也在里面。
 # 没有需要子进程直接读的额外资源——探针源码不进包，由人手动装到 Pi。
+# out/*.yml 要排除：electron-builder 的调试产物，不是构建产出
+# （早期把打包输出目录设成 out/ 时残留下来的）。
 files:
   - out/**
   - package.json
+  - "!out/*.yml"
   - "!**/*.map"
 
 mac:
