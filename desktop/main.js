@@ -17,7 +17,6 @@
 const { app, BrowserWindow, shell } = require("electron");
 const { existsSync } = require("node:fs");
 const net = require("node:net");
-const os = require("node:os");
 const path = require("node:path");
 
 /**
@@ -27,9 +26,6 @@ const path = require("node:path");
 const resourcesDir = app.isPackaged
   ? path.join(process.resourcesPath, "pi-observer")
   : path.join(__dirname, "resources");
-
-/** 运行数据目录：默认在工程外（家目录），和现在跑服务时一样 */
-const dataDir = process.env.PI_OBSERVER_DATA_DIR || path.join(os.homedir(), ".pi-observer");
 
 let mainWindow = null;
 
@@ -85,7 +81,6 @@ function startServer(port) {
   // 代价：服务崩了应用也跟着崩（错误会弹窗提示），退出时要等它自己收尾。
   process.env.PORT = String(port);
   process.env.HOSTNAME = "127.0.0.1";
-  process.env.PI_OBSERVER_DATA_DIR = dataDir;
 
   const { pathToFileURL } = require("node:url");
   void import(pathToFileURL(entry).href).catch((error) => {

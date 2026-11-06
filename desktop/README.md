@@ -123,8 +123,7 @@ node tools/desktop/render-icon.mjs
 
 **运行数据目录不再被使用。**
 新服务没有数据库，也不往 `~/.pi-observer` 写任何东西：它只读会话文件，
-只读 iCloud 里的请求目录名。`PI_OBSERVER_DATA_DIR` 这个变量留着是为了兼容旧版本，
-新版本的服务不读它。
+只读 iCloud 里的请求目录名。旧版本留下的 `~/.pi-observer` 目录可以整个删掉。
 
 ## 打包时的注意事项
 
