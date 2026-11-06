@@ -2,8 +2,6 @@
 
 import { useEffect, useState } from "react";
 
-import { ProbePill } from "./probe-pill.tsx";
-
 type Theme = "dark" | "light";
 
 const THEME_KEY = "pi-observer-theme";
@@ -12,7 +10,7 @@ function currentTheme(): Theme {
   return document.documentElement.dataset.theme === "light" ? "light" : "dark";
 }
 
-/** 顶栏：品牌、探针状态、亮 / 暗主题切换（D）。 */
+/** 顶栏：品牌、主题切换。没有探针状态，也��有设置页——项目不再有服务端的写操作。 */
 export function TopBar() {
   const [theme, setTheme] = useState<Theme>("dark");
 
@@ -47,14 +45,9 @@ export function TopBar() {
     <div className="topbar">
       <div className="topbar-inner">
         <div className="brand">
-          <span className="dot">●</span>pi-observer <span className="sub">只读</span>
+          <span className="dot">●</span>pi-observer <span className="sub">会话文件</span>
         </div>
-        <nav className="nav">
-          <a href="/">看板</a>
-          <a href="/settings">设置</a>
-        </nav>
         <div className="spacer" />
-        <ProbePill />
         <button
           className="btn ghost"
           onClick={() => apply(theme === "light" ? "dark" : "light")}

@@ -12,7 +12,7 @@
  *
  * 为什么端口要随机挑：`next start` 的 `-p` 会覆盖 `PORT` 环境变量，
  * 而 standalone 产物是直接跑 `server.js`，`PORT` 生效。随机端口还能避免
- * 和用户自己开着的开发服务撞车；探针靠 `probe.json` 找到服务，不受影响。
+ * 和用户自己开着的开发服务撞车。
  */
 const { app, BrowserWindow, shell } = require("electron");
 const { existsSync } = require("node:fs");
@@ -45,13 +45,18 @@ function findFreePort() {
   });
 }
 
-/** 等服务就绪：轮询 /api/health，超时就不开窗口 */
-async function waitForHealth(port, timeoutMs = 30_000) {
+/**
+ * 等服务就绪：轮询会话列表接口，超时就不开窗口。
+ *
+ * 用 `/api/sessions` 而不是 `/api/health`：项目没有健康检查接口了，
+ * 这个接口会真的去读会话目录，能起来就说明文件系统与路由都通。
+ */
+async function waitForServer(baseUrl, timeoutMs = 30_000) {
   const deadline = Date.now() + timeoutMs;
   let lastError = "未知错误";
   while (Date.now() < deadline) {
     try {
-      const response = await fetch(`http://127.0.0.1:${port}/api/health`);
+      const response = await fetch(`${baseUrl}/api/sessions?limit=1`);
       if (response.ok) return true;
       lastError = `HTTP ${response.status}`;
     } catch (error) {
@@ -81,8 +86,6 @@ function startServer(port) {
   process.env.PORT = String(port);
   process.env.HOSTNAME = "127.0.0.1";
   process.env.PI_OBSERVER_DATA_DIR = dataDir;
-  // 探针源码在应用包里：设置页的「安装探针」要从这里复制到 ~/.pi-observer/probe
-  process.env.PI_OBSERVER_PROBE_DIR = path.join(resourcesDir, "probe");
 
   const { pathToFileURL } = require("node:url");
   void import(pathToFileURL(entry).href).catch((error) => {
@@ -101,7 +104,7 @@ function startServer(port) {
   return null;
 }
 
-function createWindow(port) {
+function createWindow(url) {
   mainWindow = new BrowserWindow({
     width: 1440,
     height: 900,
@@ -123,15 +126,22 @@ function createWindow(port) {
     void shell.openExternal(url);
     return { action: "deny" };
   });
-  void mainWindow.loadURL(`http://127.0.0.1:${port}/`);
+  void mainWindow.loadURL(url);
 }
 
 app.whenReady().then(async () => {
   try {
+    // 外部服务优先：开发时用 `next dev`，壳不再自己起一份服务
+    const external = process.env.PI_OBSERVER_URL ?? null;
+    if (external !== null) {
+      await waitForServer(external);
+      createWindow(external);
+      return;
+    }
     const port = await findFreePort();
     startServer(port);
-    await waitForHealth(port);
-    createWindow(port);
+    await waitForServer(`http://127.0.0.1:${port}`);
+    createWindow(`http://127.0.0.1:${port}/`);
   } catch (error) {
     dialogError(error.message);
     app.quit();
@@ -143,8 +153,8 @@ app.whenReady().then(async () => {
       void app.whenReady().then(async () => {
         const port = await findFreePort();
         startServer(port);
-        await waitForHealth(port);
-        createWindow(port);
+        await waitForServer(`http://127.0.0.1:${port}`);
+        createWindow(`http://127.0.0.1:${port}/`);
       });
     }
   });

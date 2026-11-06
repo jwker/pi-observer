@@ -1,19 +1,17 @@
-import { ensureSessionBackfilled } from "@/lib/backfill.ts";
-import { getDb } from "@/lib/db.ts";
-import { log } from "@/lib/log.ts";
-import { sessionStreamData, streamVersion } from "@/lib/queries.ts";
+import { loadSessionWindow } from "@/lib/session-view.ts";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 /**
- * 单页的时间线数据（R3）。
+ * 单个会话的一段展示数据。
  *
- * 没有 `v` 或版本不一致时返回整套 `SessionStreamData`；版本一致时只返回
- * `{ unchanged: true }`。活跃会话页面每秒用上一拍的版本号轮询，文件没变时
- * 响应只有几十字节，不必每秒把 20k 条消息序列化一遍。
+ * 参数：
+ *   id      会话 id
+ *   turns   这一段给多少个 Turn（默认 20）
+ *   before  只给序号不大于它的 Turn；页面「加载更早」时带上
  *
- * 进入会话时顺手补读一次文件（PRD §9.1）：文件没变时只是两次 stat，失败不挡页面。
+ * 没有实时刷新：页面点「刷新」再来一次。
  */
 export async function GET(req: Request): Promise<Response> {
   const url = new URL(req.url);
@@ -22,27 +20,22 @@ export async function GET(req: Request): Promise<Response> {
     return Response.json({ ok: false, error: "缺少 id" }, { status: 400 });
   }
 
-  const db = getDb();
+  const turnsRaw = Number(url.searchParams.get("turns") ?? "20");
+  const beforeRaw = url.searchParams.get("before");
+
   try {
-    ensureSessionBackfilled(sessionId);
+    const window = await loadSessionWindow(sessionId, {
+      turns: Number.isFinite(turnsRaw) ? Math.min(Math.max(turnsRaw, 1), 200) : 20,
+      before: beforeRaw === null ? undefined : Number(beforeRaw),
+    });
+    if (window === null) {
+      return Response.json({ ok: false, error: "会话不存在" }, { status: 404 });
+    }
+    return Response.json({ ok: true, data: window });
   } catch (error) {
-    log("warn", "backfill", "进页面补读失败", { session_id: sessionId, error: (error as Error).message });
+    return Response.json(
+      { ok: false, error: `读取会话失败：${(error as Error).message}` },
+      { status: 500 },
+    );
   }
-
-  const version = streamVersion(sessionId, db);
-  if (version === null) {
-    return Response.json({ ok: false, error: "会话不存在" }, { status: 404 });
-  }
-  if (url.searchParams.get("v") === version) {
-    return Response.json({ ok: true, unchanged: true, version });
-  }
-
-  // 带版本号的请求是实时刷新：只回最近的一段，客户端与已有数据合并。
-  // 首屏（没有版本号）仍然给全量，这样「加载更早」能看到完整历史。
-  const live = url.searchParams.get("v") !== null;
-  const data = sessionStreamData(sessionId, db, { live });
-  if (data === null) {
-    return Response.json({ ok: false, error: "会话不存在" }, { status: 404 });
-  }
-  return Response.json({ ok: true, version, live, data });
 }

@@ -1,164 +1,29 @@
 /**
- * 看板库的行类型（纯类型，不 import 任何东西）。
- * 单独成文件是为了让客户端组件可以安全地 `import type`，不会把 `node:sqlite` 带进浏览器包。
+ * 页面用的数据形状（纯类型，不 import 任何东西）。
+ *
+ * 单独成文件是为了让客户端组件可以安全地 `import type`，
+ * 不会把 `node:fs` 之类的东西带进浏览器包。
  */
+import type { StreamTurn } from "./stream.ts";
 
-export interface SessionRow {
+/** 会话列表里的一行 */
+export interface SessionListItem {
   session_id: string;
   cwd: string;
-  file_path: string | null;
-  parent_session: string | null;
-  name: string | null;
+  file_path: string;
+  /** 会话头里的创建时间 */
   started_at: string | null;
+  /** 文件最后修改时间；这是「最后活动」的唯一依据 */
   last_activity_at: string | null;
-  message_count: number;
-  turn_count: number;
-  tool_call_count: number;
-  tokens_in: number;
-  tokens_out: number;
-  cost: number;
-  state: string;
-  source: string;
-  last_reconciled_at: string | null;
-}
-
-export interface EventRow {
-  id: number;
-  event_id: string;
-  session_id: string;
-  layer: string;
-  event_type: string;
-  run_seq: number | null;
-  turn_index: number | null;
-  /** 正文文件路径；完整正文在文件里 */
-  payload_path: string | null;
-  /** 截短后的骨架：时间线要从事件里取工具名、请求序号这类标签 */
-  payload: unknown;
-  occurred_at: string | null;
-  received_at: string;
-}
-
-export interface TurnRow {
-  id: number;
-  session_id: string;
-  run_seq: number;
-  turn_index: number;
-  message_entry_id: string;
-  started_at: string | null;
-  ended_at: string | null;
-  stop_reason: string | null;
-  thinking_level: string | null;
-  tokens_in: number | null;
-  tokens_out: number | null;
-  /** 来自助手消息 usage.cacheRead / cacheWrite；旧数据或没有 usage 时为 null */
-  cache_read: number | null;
-  cache_write: number | null;
-  cost: number | null;
-}
-
-export interface ToolCallRow {
-  tool_call_id: string;
-  session_id: string;
-  tool_name: string;
-  is_error: number;
-  duration_ms: number | null;
-  started_at: string | null;
-  ended_at: string | null;
-}
-
-/** 工具列表的一行（PRD §11.2 视图三）：不带完整参数 / 结果，点进详情再取 */
-export interface ToolCallIndexRow extends ToolCallRow {
-  parent_tool_call_id: string | null;
-  run_seq: number | null;
-  turn_index: number | null;
-  /** 助手消息条目（参数所在） */
-  entry_id: string | null;
-  /** toolResult 条目（结果所在） */
-  result_entry_id: string | null;
-  args_bytes: number;
-  result_bytes: number;
-  /** 参数 JSON 的前 500 字符，用于列表摘要；完整参数在详情页 */
-  args_preview: string | null;
-  /** 结果里的第一段文本（前 500 字符），没有文本时为空 */
-  result_preview: string | null;
-}
-
-/** 工具详情：参数与结果已解析（来自 messages，按 entry_id / result_entry_id join） */
-export interface ToolCallDetail extends ToolCallIndexRow {
-  args: unknown;
-  result: unknown;
+  size_bytes: number;
+  /** 第一条用户消息的摘要；列表里当会话名用 */
+  first_user_text: string | null;
 }
 
 /**
- * 请求列表的一行（PRD §11.2 视图二）：不带 payload / headers，正文点开详情再取。
- * token 与成本来自同一 `(session_id, run_seq, turn_index)` 的 turn，没有关联 Turn 时为 null。
- */
-export interface RequestIndexRow {
-  id: number;
-  session_id: string;
-  request_seq: number;
-  provider: string | null;
-  api: string | null;
-  model: string | null;
-  payload_bytes: number;
-  status: number | null;
-  created_at: string;
-  run_seq: number | null;
-  turn_index: number | null;
-  /** `response_headers` 的字节数，用于列表上判断有没有拿到响应头 */
-  response_headers_bytes: number;
-  tokens_in: number | null;
-  tokens_out: number | null;
-  cost: number | null;
-}
-
-/** 请求详情：正文在文件里，详情接口按路径读出来；usage 来自关联 Turn 的助手消息 */
-export interface RequestDetail extends RequestIndexRow {
-  correlation: string;
-  /** 正文文件路径；完整正文在文件里 */
-  payload_path: string | null;
-  /** 完整请求体（详情接口按路径读出来填上） */
-  payload: unknown;
-  response_headers: unknown;
-  turn_started_at: string | null;
-  turn_ended_at: string | null;
-  turn_stop_reason: string | null;
-  /** 助手消息里的 `usage`（含 cacheRead / cacheWrite 与 cost 明细）；没有关联 Turn 时为 null */
-  turn_usage: unknown;
-}
-
-export interface ProbeStatusRow {
-  last_seen_at: string | null;
-  dropped_count: number;
-  queue_depth: number;
-  probe_version: string | null;
-}
-
-/** 会话已有数据的最大序号；探针在本地游标缺失时用它种子化（schema v3 / M3-3） */
-export interface SessionCursorRow {
-  request_seq_max: number;
-  run_seq_max: number;
-}
-
-/** 会话文件里的一条条目（PRD §8.2 / §9.1）。消息树从 `parent_id` 渲染 */
-export interface MessageRow {
-  id: number;
-  session_id: string;
-  entry_id: string;
-  parent_id: string | null;
-  kind: string;
-  role: string | null;
-  timestamp: string | null;
-  entry_index: number;
-  text: string | null;
-  payload: unknown;
-}
-
-/**
- * 条目的「索引形状」：不含 payload，只带树结构与摘要需要的字段。
+ * 条目的「索引形状」：不含正文，只带树结构与摘要需要的字段。
  *
- * 它同时是 `tree.ts` 的输入类型与 `stream.ts` 建行模型时的输入；
- * 完整 payload 在行详情弹窗里按需取（`getMessageDetail`）。
+ * 它是 `tree.ts` 的输入类型：树只需要知道条目之间的父子关系。
  */
 export interface MessageIndexRow {
   entry_id: string;
@@ -168,125 +33,107 @@ export interface MessageIndexRow {
   timestamp: string | null;
   entry_index: number;
   summary: string | null;
-  /** `payload` 的字节数 */
+  /** 原始条目的字节数 */
   payload_bytes: number;
 }
 
-/** 单条条目的全文（行详情弹窗按需取） */
-export interface MessageDetail {
+/** 一次 provider 请求的引用（只有标识与路径，没有正文） */
+export interface RequestRef {
+  /** 唯一标识 = 文件名（不含扩展名） */
+  id: string;
+  filename: string;
+  path: string;
+  seq: number;
+  written_at: string | null;
+  size_bytes: number | null;
+}
+
+/** 时间线上的一个条目（会话文件里的一行） */
+export interface TimelineEntry {
   entry_id: string;
   parent_id: string | null;
   kind: string;
   role: string | null;
   timestamp: string | null;
   entry_index: number;
-  /** 完整摘要：`message` 条目是正文，其他类型是一行说明（回填时截到 2 KB） */
   text: string | null;
-  /** 正文文件路径；完整条目在文件里 */
-  payload_path: string | null;
-  /** 完整条目 JSON（详情接口按路径读出来填上） */
-  payload: unknown;
-  payload_bytes: number;
-}
-
-/**
- * 时间线用的条目行（单页重构 R2）：带正文与思考摘要，但不带完整 payload。
- *
- * 为什么不直接复用 `MessageIndexRow`：时间线要显示比树标签更长的正文，还要把
- * 助手消息里的 thinking 单独拿出来（思考开关靠它）。完整正文仍在详情弹窗里按需取。
- */
-export interface TimelineMessageRow {
-  entry_id: string;
-  parent_id: string | null;
-  kind: string;
-  role: string | null;
-  timestamp: string | null;
-  entry_index: number;
-  /** `messages.text` 的正文摘要（回填时已截到 2 KB） */
-  text: string | null;
-  /** 助手消息里的第一段 thinking（截到 2 KB）；其它条目为 null */
   thinking: string | null;
+  tool_names: string[];
+  tool_call_id: string | null;
+  tool_name: string | null;
+  is_error: boolean;
+  duration_ms: number | null;
+  usage: {
+    input: number | null;
+    output: number | null;
+    cache_read: number | null;
+    cache_write: number | null;
+    cost: number | null;
+  } | null;
+  provider: string | null;
+  model: string | null;
+  api: string | null;
+  stop_reason: string | null;
+  thinking_level: string | null;
+  response_id: string | null;
   payload_bytes: number;
 }
 
 /**
- * 单页时间线一次取到的原始数据（R2）。分页、分组、行排序在 `stream.ts` 里做，
- * 这里只负责把库里的行按会话取全。
+ * 单个会话的一段展示数据（页面的数据形状）。
  *
- * `totals` 是库里真实行数；某个数组短于总数时，说明被 `limit` 截断，界面要如实说明。
+ * Turn 已经按「用户消息」分好组，行也已经排好序：
+ * 服务端把这一段算好再给浏览器，浏览器不再重复算一遍。
  */
-export interface SessionStreamData {
-  session: SessionRow;
-  messages: TimelineMessageRow[];
-  turns: TurnRow[];
-  events: EventRow[];
-  tools: ToolCallIndexRow[];
-  requests: RequestIndexRow[];
+export interface SessionWindow {
+  session: SessionListItem;
+  /** 正序的 Turn（最新的一段） */
+  turns: StreamTurn[];
+  /** 会话前的条目；只有加载到最早时才返回 */
+  prelude: StreamTurn | null;
+  /** 还有更早的 Turn */
+  hasEarlier: boolean;
+  /** 这个会话一共多少个 Turn */
+  total: number;
+  /** 对不上任何助手消息的请求文件数 */
+  unmatched_requests: number;
   totals: {
+    entries: number;
     messages: number;
+    /** 模型 Turn 数：一条助手消息 = 一个 Turn */
     turns: number;
-    events: number;
     tools: number;
     requests: number;
+    tokens_in: number;
+    tokens_out: number;
+    cache_read: number;
+    cache_write: number;
+    cost: number;
+  };
+  branch: {
+    entries: number;
+    current: number;
+    offCurrent: number;
+    forks: number;
+    orphans: number;
   };
 }
 
-export type RowDetailKind = "message" | "tool" | "request" | "event";
-
-/**
- * 行详情弹窗一次取到的内容（R3）。
- *
- * 为什么用「一个袋子里有什么就放什么」而不是给四类行各开一个接口：弹窗只需要
- * 当前行对应的主对象，加上能从钩子载荷里确定关联到的条目 / 请求 / 工具。返回结构
- * 固定，客户端不用按 kind 猜字段。
- */
-export interface RowDetailData {
-  kind: RowDetailKind;
-  /** 文件条目（消息、系统条目、工具结果条目） */
-  message: MessageDetail | null;
-  /** 工具调用（含完整参数与结果） */
-  tool: ToolCallDetail | null;
-  /** 请求（原样的 payload 与响应头，均未脱敏） */
-  request: RequestDetail | null;
-  /** 单条钩子事件 */
-  event: EventRow | null;
-  /** 与这一行关联的钩子事件；按 id 去重 */
-  relatedEvents: EventRow[];
-  /** 钩子载荷指向的工具；事件详情用 */
-  relatedTools: ToolCallDetail[];
-  /** 钩子载荷指向的请求；事件详情用 */
-  relatedRequest: RequestDetail | null;
-  /** 工具参数 / 结果所在的文件条目；工具详情的原始 JSON 用 */
-  relatedMessages: MessageDetail[];
-}
-
-/**
- * 会话列表的一行：会话本身 + 首条用户消息摘要。
- * 会话文件头部没有会话名（实测只有 cwd / id / timestamp / type / version），
- * 所以列表里的「摘要」只能取这一会话的第一条用户消息（PRD §11.1）。
- */
-export interface SessionListItem extends SessionRow {
-  first_user_text: string | null;
-}
-
-/** 列表页概览条（PRD §11.1）。「今日」按服务器本地时区的今天 0 点算 */
-export interface OverviewStats {
-  events_today: number;
-  tokens_in_today: number;
-  tokens_out_today: number;
-  cost_today: number;
-  /** 探针累计丢弃（不是今日） */
-  dropped_total: number;
-  unreconciled_sessions: number;
-  last_reconciled_at: string | null;
-}
-
-/** 会话文件的读取进度（PRD §9.1） */
-export interface JsonlFileRow {
-  path: string;
-  session_id: string | null;
-  size: number;
-  mtime_ms: number;
-  entry_count: number;
-  last_read_at: string | null;
+/** 行详情：会话文件里的一条条目 */
+export interface EntryDetail {
+  entry_id: string;
+  kind: string;
+  role: string | null;
+  timestamp: string | null;
+  /** 原始条目 JSON */
+  raw: unknown;
+  /** 工具参数与结果（工具相关的条目才有） */
+  tool: {
+    tool_call_id: string;
+    tool_name: string;
+    is_error: boolean;
+    duration_ms: number | null;
+    args: unknown;
+    result: unknown;
+  } | null;
 }

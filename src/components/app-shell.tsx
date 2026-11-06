@@ -2,9 +2,6 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { buildSessionStream, turnWindow } from "@/lib/stream.ts";
-import { mergeStreamData, normalizeStreamData } from "@/lib/stream-merge.ts";
-import type { StreamCategory, StreamRow, TurnWindow } from "@/lib/stream.ts";
 import {
   DEFAULT_FILTERS,
   FILTER_KEY,
@@ -12,8 +9,8 @@ import {
   stringifyFilters,
   type TimelineFilters,
 } from "@/lib/filters.ts";
-import type { SessionListItem, SessionStreamData } from "@/lib/types.ts";
-import { useStreamEvent } from "./hooks.ts";
+import type { StreamCategory, StreamRow } from "@/lib/stream.ts";
+import type { SessionListItem, SessionWindow } from "@/lib/types.ts";
 import { RowDetailModal, type DetailTarget } from "./row-detail-modal.tsx";
 import { SessionSidebar } from "./session-sidebar.tsx";
 import { SessionTimeline } from "./session-timeline.tsx";
@@ -24,67 +21,44 @@ interface AppShellProps {
   initialSessions: SessionListItem[];
   initialTotal: number;
   initialSessionId: string | null;
-  initialData: SessionStreamData | null;
-  initialVersion: string | null;
+  initialData: SessionWindow | null;
 }
 
-interface SessionResponse {
-  ok?: boolean;
-  unchanged?: boolean;
-  version?: string;
-  /** true 表示这次只带回了最近的一段，需要和已有数据合并 */
-  live?: boolean;
-  data?: SessionStreamData;
-  error?: string;
-}
-
-/** 单页应用：左栏项目 / 会话，右栏会话头 + 筛选 + 时间线，详情用弹窗。 */
+/**
+ * 单页应用：左栏项目 / 会话，右栏会话头 + 筛选 + 时间线。
+ *
+ * 没有实时刷新：数据在服务端渲染时读一次，之后由页面上的「刷新」按钮触发。
+ * 「加载更早」会再问服务端要更早的一段。
+ */
 export function AppShell({
   initialSessions,
   initialTotal,
   initialSessionId,
   initialData,
-  initialVersion,
 }: AppShellProps) {
   const [sessions, setSessions] = useState<SessionListItem[]>(initialSessions);
   const [total, setTotal] = useState(initialTotal);
   const [selectedId, setSelectedId] = useState<string | null>(initialSessionId);
-  const [data, setData] = useState<SessionStreamData | null>(initialData);
+  const [window_, setWindow] = useState<SessionWindow | null>(initialData);
   const [loading, setLoading] = useState(false);
+  const [loadingEarlier, setLoadingEarlier] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [pages, setPages] = useState(1);
   const [filters, setFilters] = useState<TimelineFilters>(DEFAULT_FILTERS);
   const [filtersReady, setFiltersReady] = useState(false);
   const [openTurns, setOpenTurns] = useState<Set<string>>(new Set());
   const [detail, setDetail] = useState<DetailTarget | null>(null);
-  // 用户正在看 / 点时间线时暂停实时刷新：整页每秒换一次内容会让人点不到东西
-  const [interacting, setInteracting] = useState(false);
-  const paused = interacting || detail !== null;
 
   const selectedIdRef = useRef<string | null>(initialSessionId);
-  const dataRef = useRef<SessionStreamData | null>(initialData);
-  const versionRef = useRef<string | null>(initialVersion);
   const sequenceRef = useRef(0);
-  const pollingRef = useRef(false);
-  const autoOpenedRef = useRef<Set<string>>(new Set());
 
   selectedIdRef.current = selectedId;
-  dataRef.current = data;
 
   const selected = useMemo(() => {
     const found = sessions.find((session) => session.session_id === selectedId);
     if (found !== undefined) return found;
-    if (data !== null && data.session.session_id === selectedId) {
-      return { ...data.session, first_user_text: null } satisfies SessionListItem;
-    }
+    if (window_ !== null && window_.session.session_id === selectedId) return window_.session;
     return null;
-  }, [sessions, selectedId, data]);
-
-  const stream = useMemo(() => (data === null ? null : buildSessionStream(data)), [data]);
-  const windowed: TurnWindow | null = useMemo(
-    () => (stream === null ? null : turnWindow(stream, pages, PAGE_SIZE)),
-    [stream, pages],
-  );
+  }, [sessions, selectedId, window_]);
 
   const refreshSessions = useCallback(async () => {
     try {
@@ -100,69 +74,60 @@ export function AppShell({
     }
   }, []);
 
-  const loadStream = useCallback(async (
-    sessionId: string,
-    options: { version: string | null; showLoading: boolean },
-  ) => {
-    const sequence = ++sequenceRef.current;
-    if (options.showLoading) setLoading(true);
+  /**
+   * 取一段会话数据。
+   *
+   * `before` 不为空时是要更早的一段，结果接到已有数据前面（更早的 Turn 在下面）。
+   */
+  const loadWindow = useCallback(
+    async (sessionId: string, options: { before: number | null; append: boolean; showLoading: boolean }) => {
+      const sequence = ++sequenceRef.current;
+      if (options.showLoading) setLoading(true);
+      const params = new URLSearchParams({ id: sessionId, turns: String(PAGE_SIZE) });
+      if (options.before !== null) params.set("before", String(options.before));
 
-    const params = new URLSearchParams({ id: sessionId });
-    if (options.version !== null) params.set("v", options.version);
-
-    try {
-      const response = await fetch(`/api/session?${params.toString()}`);
-      const json = (await response.json()) as SessionResponse;
-      if (sequence !== sequenceRef.current || selectedIdRef.current !== sessionId) return;
-
-      if (!response.ok || json.ok === false) {
-        setError(json.error ?? "读取会话失败。");
-        return;
+      try {
+        const response = await fetch(`/api/session?${params.toString()}`);
+        const json = (await response.json()) as { ok?: boolean; data?: SessionWindow; error?: string };
+        if (sequence !== sequenceRef.current || selectedIdRef.current !== sessionId) return;
+        if (!response.ok || json.ok === false) {
+          setError(json.error ?? "读取会话失败。");
+          return;
+        }
+        if (json.data) {
+          setWindow((previous) => {
+            if (!options.append || previous === null) return json.data!;
+            // 更早的一段接在前面：Turn 是正序，早的在前
+            const merged = new Map<string, SessionWindow["turns"][number]>();
+            for (const turn of [...json.data!.turns, ...previous.turns]) merged.set(turn.key, turn);
+            return {
+              ...previous,
+              turns: [...merged.values()],
+              prelude: json.data!.prelude ?? previous.prelude,
+              hasEarlier: json.data!.hasEarlier,
+            };
+          });
+          setError(null);
+        }
+      } catch {
+        if (sequence === sequenceRef.current) setError("读取会话失败。看板服务可能已经断开。");
+      } finally {
+        if (sequence === sequenceRef.current) setLoading(false);
       }
-      if (json.unchanged === true) {
-        setError(null);
-        return;
-      }
-      if (json.data) {
-        if (json.version !== undefined) versionRef.current = json.version;
-        // 实时刷新只带最近的一段：与已有数据合并，全量首屏直接用
-        const incoming = json.data;
-        setData((previous) =>
-          previous === null || json.live !== true
-            ? incoming
-            : mergeStreamData(previous, incoming),
-        );
-        setError(null);
-        setSessions((previous) =>
-          previous.map((session) =>
-            session.session_id === json.data?.session.session_id
-              ? { ...session, ...json.data.session, first_user_text: session.first_user_text }
-              : session,
-          ),
-        );
-      }
-    } catch {
-      if (sequence === sequenceRef.current) {
-        setError("读取会话失败。看板服务可能已经断开。");
-      }
-    } finally {
-      if (sequence === sequenceRef.current) setLoading(false);
-    }
-  }, []);
+    },
+    [],
+  );
 
   const selectSession = useCallback(
     (sessionId: string, options?: { push?: boolean }) => {
-      if (sessionId === selectedIdRef.current && dataRef.current !== null) return;
+      if (sessionId === selectedIdRef.current) return;
       selectedIdRef.current = sessionId;
       setSelectedId(sessionId);
-      setData(null);
+      setWindow(null);
       setError(null);
-      setPages(1);
       setDetail(null);
       setLoading(true);
       setOpenTurns(new Set());
-      autoOpenedRef.current.clear();
-      versionRef.current = null;
 
       const url = new URL(window.location.href);
       url.searchParams.set("session", sessionId);
@@ -175,9 +140,9 @@ export function AppShell({
         if (scroller !== null) scroller.scrollTop = 0;
       });
 
-      void loadStream(sessionId, { version: null, showLoading: true });
+      void loadWindow(sessionId, { before: null, append: false, showLoading: true });
     },
-    [loadStream],
+    [loadWindow],
   );
 
   // 首屏没带 ?session= 时补上，让地址栏始终等于当前会话
@@ -200,19 +165,23 @@ export function AppShell({
     return () => window.removeEventListener("popstate", onPopState);
   }, [selectSession]);
 
+  /** 刷新：重读当前会话文件，同时刷新列表 */
   const refresh = useCallback(() => {
-    if (selectedId === null) return;
-    void loadStream(selectedId, { version: null, showLoading: true });
-  }, [selectedId, loadStream]);
+    void refreshSessions();
+    if (selectedIdRef.current === null) return;
+    void loadWindow(selectedIdRef.current, { before: null, append: false, showLoading: true });
+  }, [loadWindow, refreshSessions]);
 
-  // 打开会话时默认展开正在进行的 Turn；只自动展开一次，用户收起后不抢回来
-  useEffect(() => {
-    if (stream === null) return;
-    const last = stream.turns[stream.turns.length - 1];
-    if (last === undefined || !last.running || autoOpenedRef.current.has(last.key)) return;
-    autoOpenedRef.current.add(last.key);
-    setOpenTurns((previous) => new Set(previous).add(last.key));
-  }, [stream]);
+  /** 加载更早的一段 Turn */
+  const loadEarlier = useCallback(() => {
+    if (window_ === null || selectedIdRef.current === null) return;
+    const oldest = window_.turns[0];
+    const before = oldest?.index ?? 1;
+    setLoadingEarlier(true);
+    void loadWindow(selectedIdRef.current, { before: before - 1, append: true, showLoading: false }).finally(() =>
+      setLoadingEarlier(false),
+    );
+  }, [window_, loadWindow]);
 
   // 筛选存 localStorage；首屏先按默认全开渲染，挂载后再套用保存值
   useEffect(() => {
@@ -234,83 +203,9 @@ export function AppShell({
     }
   }, [filters, filtersReady]);
 
-  // 任何一批写入后服务端都会广播会话更新；当前会话立即重拉，其他会话只刷列表。
-  //
-  // 一次模型请求会带来好几条事件（请求、响应、工具起止…），逐条重拉会让页面每秒
-  // 换好几次内容，看着像在闪。这里把它们合并：800 毫秒内只重拉一次。
-  const lastReloadRef = useRef(0);
-  const reloadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const pausedRef = useRef(paused);
-  pausedRef.current = paused;
-
-  const reloadNow = useCallback(() => {
-    if (pausedRef.current) return;
-    lastReloadRef.current = Date.now();
-    void refreshSessions();
-    const current = selectedIdRef.current;
-    if (current === null) return;
-    // 带版本号：服务端发现没变化就只回 unchanged，不重复传整套数据
-    void loadStream(current, { version: versionRef.current, showLoading: false });
-  }, [loadStream, refreshSessions]);
-
-  const scheduleReload = useCallback(() => {
-    if (pausedRef.current) return;
-    const wait = 1500 - (Date.now() - lastReloadRef.current);
-    if (wait <= 0) {
-      reloadNow();
-      return;
-    }
-    if (reloadTimerRef.current !== null) return;
-    reloadTimerRef.current = setTimeout(() => {
-      reloadTimerRef.current = null;
-      reloadNow();
-    }, wait);
-  }, [reloadNow]);
-
-  useEffect(
-    () => () => {
-      if (reloadTimerRef.current !== null) clearTimeout(reloadTimerRef.current);
-    },
-    [],
-  );
-
-  useStreamEvent((event, payload) => {
-    if (event !== "session.updated") return;
-    const current = selectedIdRef.current;
-    const changed = typeof payload.session_id === "string" ? payload.session_id : current;
-    if (current === null || changed !== current) {
-      // 别的会话有动静：只刷列表
-      void refreshSessions();
-      return;
-    }
-    scheduleReload();
-  });
-
-  // 活跃会话每 2 秒轮询；版本号没变时服务端只回一个 unchanged，不做整页重渲染。
-  // 用户正在操作时间线时先不刷新——整页换内容会让人点不到东西。
-  useEffect(() => {
-    if (selectedId === null || data?.session.state !== "active" || paused) return;
-    const timer = setInterval(() => {
-      if (pollingRef.current) return;
-      pollingRef.current = true;
-      void loadStream(selectedId, { version: versionRef.current, showLoading: false }).finally(() => {
-        pollingRef.current = false;
-      });
-    }, 2000);
-    return () => clearInterval(timer);
-  }, [selectedId, data?.session.state, loadStream, paused]);
-
-  // 切会话时时间线停在顶部（最新在上），不做「滚到底部」
-  useEffect(() => {
-    const scroller = document.querySelector<HTMLElement>(".tl-scroll");
-    if (scroller !== null) scroller.scrollTop = 0;
-  }, [selectedId]);
-
   const expandAll = useCallback(() => {
-    if (windowed === null) return;
-    const turns = [...windowed.turns];
-    const prelude = windowed.prelude;
-    const shown = prelude === null ? turns : [...turns, prelude];
+    if (window_ === null) return;
+    const shown = window_.prelude === null ? window_.turns : [...window_.turns, window_.prelude];
     const allOpen = shown.length > 0 && shown.every((turn) => openTurns.has(turn.key));
 
     setOpenTurns((previous) => {
@@ -319,7 +214,7 @@ export function AppShell({
       for (const turn of shown) next.add(turn.key);
       return next;
     });
-  }, [windowed, openTurns]);
+  }, [window_, openTurns]);
 
   const toggleTurn = useCallback((key: string) => {
     if (key === "") return;
@@ -381,19 +276,17 @@ export function AppShell({
           <main className="main">
             <div className="empty" style={{ padding: "80px 12px" }}>
               {sessions.length === 0
-                ? "还没有任何会话数据：会话文件目录里没有读到 .jsonl，探针也还没收到过事件。"
+                ? "还没有任何会话文件：在会话目录里放几个 .jsonl 就能看到。"
                 : "从左侧选择一个会话。"}
             </div>
           </main>
         ) : (
           <SessionTimeline
-        onInteractChange={setInteracting}
             session={selected}
-            data={data}
-            stream={stream}
-            turnWindow={windowed}
+            data={window_}
             filters={filters}
             loading={loading}
+            loadingEarlier={loadingEarlier}
             error={error}
             openTurns={openTurns}
             onToggleCategory={toggleCategory}
@@ -401,7 +294,7 @@ export function AppShell({
             onToggleBranch={toggleBranch}
             onToggleTurn={toggleTurn}
             onExpandAll={expandAll}
-            onLoadEarlier={() => setPages((previous) => previous + 1)}
+            onLoadEarlier={loadEarlier}
             onRefresh={refresh}
             onDetail={(row: StreamRow) => {
               if (selectedId !== null) setDetail({ sessionId: selectedId, row });
@@ -414,4 +307,3 @@ export function AppShell({
     </>
   );
 }
-

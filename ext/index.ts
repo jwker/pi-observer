@@ -1,698 +1,142 @@
 /**
  * pi-observer 探针（Pi 扩展）。
  *
- * 只做两件事：订阅通知型事件、批量推到看板服务。消息正文不经过探针——
- * 服务端每秒读一次活跃会话的 JSONL，settle 后再对账一次（PRD §9.1）。
- * 只读约束（PRD §7.2）：所有 handler 返回 `undefined`，全部包在 try/catch 里，
- * 不调用任何写入 API，不修改 event 对象。
+ * 只有一个钩子：`before_provider_request`。
  *
- * 生命周期（PRD §7.1）：工厂函数只注册 handler；队列、定时器、令牌都在
- * `session_start` 里建；`session_shutdown` 幂等收尾。
+ * 它做一件��：把这次请求的原始请求体写成文件，放到 iCloud 里的请求目录：
  *
- * 事件清单与订阅取舍见 PRD §5.2；`before_provider_request` / `after_provider_response`
- * 从 M3 起订阅，payload 先脱敏、再按单条上限截断。
+ *     <requestStoreDir>/<会话 id>/req-<六位序号>-<紧凑时间戳>.json
+ *
+ * 文件名就是「唯一标识」：在看板的对话里能看到同名的标识，
+ * 拿去 Finder / 编辑器里就能找到那一份请求正文。
+ *
+ * 约束：
+ *   - 只读：不调用 Pi 的任何写入接口，不改 event 上的对象，不返回替换值；
+ *   - 不发网络请求：探针不连看板，写完文件就结束；
+ *   - 写文件失败不影响 Pi：异常只写一行日志，绝不抛给 Pi。
+ *
+ * 目录位置：环境变量 `PI_REQUEST_STORE_DIR` 优先，默认是
+ * `~/Library/Mobile Documents/com~apple~CloudDocs/PiRequests`。
  */
-import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { mkdirSync, readdirSync, renameSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
-import {
-  PROBE_VERSION,
-  type EventLayer,
-  type IngestRecord,
-  type SessionRecord,
-  type TurnRecord,
-} from "../src/lib/protocol.ts";
-import { checkHealth, getSessionCursor } from "./client.ts";
-import { loadProbeConfig, type ProbeConfig } from "./config.ts";
-import { createFlusher, type Flusher } from "./flush.ts";
-import { assistantLike } from "./assistant.ts";
-import { BoundedQueue } from "./queue.ts";
-import { createProbeLogger, probeLogDir, type ProbeLogger } from "./logger.ts";
-import { createPayloadStore, type PayloadStore } from "./payload-store.ts";
-import { refreshProbeConfig } from "./refresh.ts";
-import { RequestTracker } from "./request.ts";
-import { sessionCursorStore } from "./session-cursor.ts";
+/** 请求正文的默认存放目录：iCloud Drive 下的一个文件夹 */
+export const DEFAULT_REQUEST_STORE_DIR = join(
+  homedir(),
+  "Library",
+  "Mobile Documents",
+  "com~apple~CloudDocs",
+  "PiRequests",
+);
 
-interface SessionInfo {
-  sessionId: string;
-  filePath: string | null;
-  cwd: string;
-  name: string | null;
-  version: number | null;
+/** 文件名格式：`req-<六位序号>-<紧凑时间戳>` */
+const NAME_PATTERN = /^req-(\d{6})-(\d{8}T\d{9}Z)\.json$/;
+
+/** 目录名：会话 id 里的非法字符换成下划线 */
+function safeSegment(id: string): string {
+  const cleaned = id.replace(/[^A-Za-z0-9._-]/g, "_");
+  if (cleaned === id && cleaned.length <= 64) return cleaned;
+  return cleaned.slice(0, 48);
 }
 
-interface ProbeState {
-  config: ProbeConfig;
-  session: SessionInfo | null;
-  queue: BoundedQueue<IngestRecord>;
-  flusher: Flusher;
-  /** 请求序号 + 请求/响应对应；每个会话一个 */
-  requests: RequestTracker;
-  /** 正文存储：请求体与事件正文都写成文件 */
-  payloads: PayloadStore;
-  /** 把本轮运行序号写进会话游标（跨 Pi 进程不重置） */
-  persistRunSeq: (seq: number) => void;
-  token: string | null;
-  runSeq: number;
-  runStartedAt: string | null;
-  turnIndex: number;
-  turnStartedAt: string | null;
-  batchTimer: ReturnType<typeof setInterval> | null;
-  /** 被服务端拒绝而丢掉的条数，计入上报的 dropped_count */
-  rejectedByServer: number;
-  lastActivity: string;
+/** 紧凑时间戳：`20261102T114049412Z` */
+function compactTime(at: Date): string {
+  const pad = (n: number, width = 2): string => String(n).padStart(width, "0");
+  return (
+    `${pad(at.getUTCFullYear(), 4)}${pad(at.getUTCMonth() + 1)}${pad(at.getUTCDate())}` +
+    `T${pad(at.getUTCHours())}${pad(at.getUTCMinutes())}${pad(at.getUTCSeconds())}${pad(at.getUTCMilliseconds(), 3)}Z`
+  );
 }
 
-let state: ProbeState | null = null;
-
-/**
- * 探针日志默认只写文件（`data/probe.log`），不打进用户的 Pi 终端——
- * 否则用户在自己项目里会突然看到与本项目无关的消息。
- * 需要时用 `PI_OBSERVER_DEBUG=1` 让它同时打到 stderr。
- */
-let logger: ProbeLogger = {
-  log: (message: string) => {
-    try {
-      console.error(`[pi-observer] ${message}`);
-    } catch {
-      // 连日志都失败就算了
-    }
-  },
-  file: () => null,
-};
-
-const nowIso = (): string => new Date().toISOString();
-
-function jsonSize(value: unknown): number {
+/** 目录里已有的最大序号；没有文件时是 0 */
+function maxSeq(dir: string): number {
+  let names: string[];
   try {
-    return Buffer.byteLength(JSON.stringify(value) ?? "", "utf8");
+    names = readdirSync(dir);
   } catch {
-    return 1024;
+    return 0;
   }
-}
-
-/** payload 里的 model 字段（不同 API 都可能带；拿不到就返回 null） */
-function payloadModel(payload: unknown): string | null {
-  if (typeof payload !== "object" || payload === null) return null;
-  const value = (payload as { model?: unknown }).model;
-  return typeof value === "string" && value !== "" ? value : null;
-}
-
-/** 每个 handler 的外壳：异常只写本地日志，绝不向 Pi 抛出（PRD §7.2） */
-function safe(label: string, fn: () => void): void {
-  try {
-    fn();
-  } catch (error) {
-    logger.log(`${label} 处理失败：${(error as Error).message}`);
+  let max = 0;
+  for (const name of names) {
+    const match = NAME_PATTERN.exec(name);
+    if (match === null) continue;
+    const seq = Number(match[1]);
+    if (Number.isFinite(seq) && seq > max) max = seq;
   }
+  return max;
 }
 
-/** 异步 handler 的外壳：同样不向 Pi 抛出 */
-async function safeAsync(label: string, fn: () => Promise<void>): Promise<void> {
+/** 序列化成 JSON；失败时返回 null（不写空文件） */
+function serialize(value: unknown): string | null {
   try {
-    await fn();
-  } catch (error) {
-    logger.log(`${label} 处理失败：${(error as Error).message}`);
-  }
-}
-
-function sessionInfo(ctx: ExtensionContext): SessionInfo | null {
-  try {
-    const sessionManager = ctx.sessionManager;
-    const sessionId = sessionManager.getSessionId();
-    if (typeof sessionId !== "string" || sessionId === "") return null;
-
-    let filePath: string | null = null;
-    try {
-      filePath = sessionManager.getSessionFile() ?? null;
-    } catch {
-      filePath = null;
-    }
-
-    let name: string | null = null;
-    try {
-      name = sessionManager.getSessionName() ?? null;
-    } catch {
-      name = null;
-    }
-
-    let version: number | null = null;
-    try {
-      const header = sessionManager.getHeader() as { version?: unknown } | undefined;
-      version = typeof header?.version === "number" ? header.version : null;
-    } catch {
-      version = null;
-    }
-
-    return {
-      sessionId,
-      filePath,
-      cwd: typeof ctx.cwd === "string" && ctx.cwd !== "" ? ctx.cwd : "",
-      name,
-      version,
-    };
+    const json = JSON.stringify(value ?? null, null, 0);
+    return typeof json === "string" ? json : null;
   } catch {
     return null;
   }
 }
 
-function readToken(s: ProbeState): string | null {
-  if (s.token) return s.token;
-  try {
-    const token = readFileSync(s.config.tokenFile, "utf8").trim();
-    if (token !== "") s.token = token;
-  } catch {
-    // 看板服务还没启动过，令牌文件还不存在；下次再试
-  }
-  return s.token;
-}
-
-/**
- * 重读配置文件，看看板地址、数据目录是不是变了。
- *
- * 什么时候会变：桌面版自己挑空闲端口，服务重启后端口也可能不一样。
- * 环境变量没法注入到已经在跑的 Pi 进程里，所以只能靠文件——
- * 连不上的时候重读一次，变了就换过去，不用让用户重开 Pi。
- *
- * 返回 true 表示配置真的变了。
- */
-function refreshConfig(s: ProbeState): boolean {
-  const result = refreshProbeConfig(s.config, () => loadProbeConfig());
-  if (!result.changed) return false;
-
-  s.config = result.config;
-  // 令牌文件换了的话，缓存里的旧令牌作废：下一批重新读新文件
-  if (result.tokenFileChanged) s.token = null;
-  logger.log(`看板配置已更新：${result.config.baseUrl}`);
-  return true;
-}
-
-/**
- * 发一批（内部使用抽出来的发送器）。
- * 退避闸门与「绕过退避」的取舍见 `ext/flush.ts` 的注释。
- */
-async function flush(s: ProbeState, options: { ignoreBackoff?: boolean; timeoutMs?: number } = {}): Promise<boolean> {
-  return s.flusher.flush(options);
-}
-
-/** 退出收尾：在预算内反复发，直到队列清空或时间用完 */
-async function drainWithin(s: ProbeState, budgetMs: number): Promise<number> {
-  return s.flusher.drainWithin(budgetMs);
-}
-
-function emit(s: ProbeState, record: IngestRecord): void {
-  s.queue.push(record);
-  if (s.queue.depth >= s.config.batchSize) void flush(s);
-}
-
-function pushEvent(
-  s: ProbeState,
-  layer: EventLayer,
-  eventType: string,
-  payload: unknown,
-  location?: { runSeq?: number | null; turnIndex?: number | null },
-): void {
-  if (!s.session) return;
-  s.lastActivity = nowIso();
-  const eventId = randomUUID();
-  // 事件正文写成文件，批次里只带路径
-  const stored = s.payloads.write("event", s.session.sessionId, eventId, payload);
-  emit(s, {
-    kind: "event",
-    event_id: eventId,
-    session_id: s.session.sessionId,
-    layer,
-    event_type: eventType,
-    payload_path: stored?.path ?? null,
-    occurred_at: s.lastActivity,
-    run_seq: location?.runSeq !== undefined ? location.runSeq : (s.runStartedAt ? s.runSeq : null),
-    turn_index: location?.turnIndex !== undefined ? location.turnIndex : (s.turnStartedAt ? s.turnIndex : null),
-  });
-}
-
-function pushSession(s: ProbeState, stateName: SessionRecord["state"]): void {
-  if (!s.session) return;
-  emit(s, {
-    kind: "session",
-    session_id: s.session.sessionId,
-    cwd: s.session.cwd,
-    file_path: s.session.filePath,
-    parent_session: null,
-    version: s.session.version,
-    name: s.session.name,
-    started_at: null,
-    last_activity_at: s.lastActivity,
-    state: stateName,
-    source: "live",
-  });
-}
-
-function startTimers(s: ProbeState): void {
-  stopTimers(s);
-  s.batchTimer = setInterval(() => void flush(s), s.config.batchIntervalMs);
-  s.batchTimer.unref?.();
-}
-
-/**
- * 给收尾 flush 加时限。
- * 注意 `setTimeout` 必须 `unref()` 并在结束时 `clearTimeout`：否则这个 3 秒的定时器
- * 会把 Node 的事件循环多留 3 秒，直接变成 Pi 退出时「恒定多花 3 秒」。
- */
-async function flushWithin(s: ProbeState, ms: number): Promise<void> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<void>((resolve) => {
-    timer = setTimeout(resolve, ms);
-    timer.unref?.();
-  });
-  try {
-    await Promise.race([drainWithin(s, ms - 100), timeout]);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
-}
-
-function stopTimers(s: ProbeState): void {
-  if (s.batchTimer) {
-    clearInterval(s.batchTimer);
-    s.batchTimer = null;
-  }
+/** 请求目录 */
+function requestDir(sessionId: string, root: string): string {
+  return join(root, safeSegment(sessionId));
 }
 
 export default function probe(pi: ExtensionAPI): void {
-  pi.on("session_start", (event, ctx) =>
-    safeAsync("session_start", async () => {
-      const session = sessionInfo(ctx);
-      if (!session) {
-        logger.log("拿不到会话信息，本会话不采集");
-        return;
-      }
+  const root = process.env.PI_REQUEST_STORE_DIR ?? DEFAULT_REQUEST_STORE_DIR;
 
-      const config = loadProbeConfig();
-      // 日志落点与令牌同目录（默认 <repo>/data/probe.log）；默认不打终端
-      logger = createProbeLogger({
-        dir: probeLogDir(config.tokenFile),
-        toStderr: config.debug,
-      });
-      const queue = new BoundedQueue<IngestRecord>(jsonSize, {
-        maxRecords: config.maxQueueRecords,
-        maxBytes: config.maxQueueBytes,
-      });
-
-      // 会话游标：request_seq 与 run_seq 都跨 Pi 进程继续。否则 --resume 后
-      // runs 的 (session_id, run_seq) 会覆盖上一轮，请求 join Turn 也会撞车。
-      const cursorStore = sessionCursorStore(config.tokenFile, session.sessionId);
-      const cursor = cursorStore.load();
-      let cursorWarned = false;
-      const persistCursor = () => {
-        try {
-          cursorStore.save(cursor);
-        } catch (error) {
-          // 只提醒一次：写不了游标时序号仍可用，但重开同一会话可能撞号
-          if (!cursorWarned) {
-            cursorWarned = true;
-            logger.log(`会话游标写入失败（${(error as Error).message}）；续跑同一会话时可能覆盖旧运行/请求`);
-          }
-        }
-      };
-
-      // 第一次跑新版本 / 换了数据目录时本地游标是空的：从看板取该会话已用到的最大序号，
-      // 否则 --resume 旧会话会从 1 重来，覆盖 runs 并让请求与 Turn 关联撞车。
-      // 旧版游标只存过 request_seq（runSeq 读出来是 0），所以这里按 runSeq 判断。
-      if (cursor.runSeq === 0) {
-        const remote = await getSessionCursor({
-          url: `${config.baseUrl}/api/sessions/${encodeURIComponent(session.sessionId)}/cursor`,
-        });
-        if (remote) {
-          const before = { ...cursor };
-          cursor.requestSeq = Math.max(cursor.requestSeq, remote.requestSeq);
-          cursor.runSeq = Math.max(cursor.runSeq, remote.runSeq);
-          if (cursor.requestSeq !== before.requestSeq || cursor.runSeq !== before.runSeq) persistCursor();
-        }
-      }
-
-      // 正文存储：与令牌同目录下的 payloads/，服务端按同一套相对路径解析。
-      // 根目录取的时候现取：数据目录变了以后不用重启 Pi。
-      const payloads = createPayloadStore({
-        root: () => nextState.config.payloadDir,
-        log: (message) => logger.log(message),
-      });
-
-      const requests = new RequestTracker({
-        sessionId: session.sessionId,
-        store: payloads,
-        initialSeq: cursor.requestSeq,
-        persistSeq: (seq) => {
-          cursor.requestSeq = seq;
-          persistCursor();
-        },
-        log: config.debugRequests ? (message) => logger.log(message) : undefined,
-      });
-
-      const nextState: ProbeState = {
-        config,
-        session,
-        queue,
-        flusher: createFlusher({
-          queue,
-          // 现取：看板地址变了以后不用重启 Pi
-          ingestUrl: () => nextState.config.ingestUrl,
-          token: () => readToken(nextState),
-          rejectedCount: () => nextState.rejectedByServer,
-          // 服务端回了 401 说明缓存的令牌不再有效（重新生成过、指向了别的实例）。
-          // 丢掉缓存让下一次重试重读文件，否则探针会每批都被拒、且自己永远不会恢复。
-          onUnauthorized: () => {
-            nextState.token = null;
-          },
-          // 连不上时重读配置文件：桌面版换端口、服务重启后换端口都能跟上
-          onUnreachable: () => refreshConfig(nextState),
-          maxBatchRecords: config.maxBatchRecords,
-          maxBatchBytes: config.maxBatchBytes,
-          payloadRoot: () => config.payloadDir,
-          log: (message) => logger.log(message),
-        }),
-        requests,
-        payloads,
-        persistRunSeq: (seq) => {
-          cursor.runSeq = seq;
-          persistCursor();
-        },
-        token: null,
-        runSeq: cursor.runSeq,
-        runStartedAt: null,
-        turnIndex: 0,
-        turnStartedAt: null,
-        batchTimer: null,
-        rejectedByServer: 0,
-        lastActivity: nowIso(),
-      };
-      state = nextState;
-
-      pushEvent(state, "session", "session_start", {
-        reason: event.reason,
-        previousSessionFile: event.previousSessionFile ?? null,
-        cwd: session.cwd,
-        filePath: session.filePath,
-        version: session.version,
-        probeVersion: PROBE_VERSION,
-      }, { runSeq: null, turnIndex: null });
-      pushSession(state, "idle");
-      startTimers(state);
-
-      // 服务可用性探测：失败也不阻断，记录一条事件即可
-      void checkHealth({ url: config.healthUrl }).then((healthy) => {
-        if (!state || state.session?.sessionId !== session.sessionId) return;
-        pushEvent(state, "session", "probe_health", { healthy, url: config.healthUrl });
-      });
-    }),
-  );
-
-  pi.on("session_info_changed", (event) =>
-    safe("session_info_changed", () => {
-      if (!state?.session) return;
-      state.session.name = event.name ?? null;
-      pushEvent(state, "session", "session_info_changed", { name: event.name ?? null });
-      pushSession(state, "idle");
-    }),
-  );
-
-  pi.on("session_compact", (event) =>
-    safe("session_compact", () => {
-      if (!state) return;
-      pushEvent(state, "session", "session_compact", {
-        reason: event.reason,
-        fromExtension: event.fromExtension,
-        willRetry: event.willRetry,
-      });
-    }),
-  );
-
-  pi.on("session_compact_failed", (event) =>
-    safe("session_compact_failed", () => {
-      if (!state) return;
-      pushEvent(state, "session", "session_compact_failed", {
-        reason: event.reason,
-        errorMessage: event.errorMessage ?? null,
-        aborted: event.aborted,
-        willRetry: event.willRetry,
-      });
-    }),
-  );
-
-  pi.on("session_tree", (event) =>
-    safe("session_tree", () => {
-      if (!state) return;
-      pushEvent(state, "session", "session_tree", {
-        newLeafId: event.newLeafId,
-        oldLeafId: event.oldLeafId,
-        fromExtension: event.fromExtension ?? false,
-      });
-    }),
-  );
-
-  pi.on("agent_start", () =>
-    safe("agent_start", () => {
-      // 与 pushEvent / pushSession 一致地先判session：否则会发出 session_id 为空的 run 记录，
-      // 而空 session_id 会让整批被服务端拒（一条坏记录毒掉整批）
-      if (!state?.session) return;
-      state.runSeq += 1;
-      state.persistRunSeq(state.runSeq);
-      state.runStartedAt = nowIso();
-      state.turnIndex = 0;
-      pushEvent(state, "agent", "agent_start", { runSeq: state.runSeq });
-      emit(state, {
-        kind: "run",
-        session_id: state.session.sessionId,
-        run_seq: state.runSeq,
-        started_at: state.runStartedAt,
-        ended_at: null,
-        outcome: null,
-      });
-      pushSession(state, "active");
-    }),
-  );
-
-  pi.on("agent_end", (event) =>
-    safe("agent_end", () => {
-      if (!state) return;
-      pushEvent(state, "agent", "agent_end", {
-        runSeq: state.runSeq,
-        messageCount: Array.isArray(event.messages) ? event.messages.length : 0,
-      });
-    }),
-  );
-
-  pi.on("agent_settled", (event) =>
-    safe("agent_settled", () => {
-      if (!state?.session) return;
-      const endedAt = nowIso();
-      pushEvent(state, "agent", "agent_settled", { runSeq: state.runSeq, aborted: event.aborted });
-      emit(state, {
-        kind: "run",
-        session_id: state.session.sessionId,
-        run_seq: state.runSeq,
-        started_at: state.runStartedAt,
-        ended_at: endedAt,
-        outcome: event.aborted ? "aborted" : "completed",
-      });
-      state.runStartedAt = null;
-      pushSession(state, "idle");
-    }),
-  );
-
-  // turn_start / turn_end 不再产生事件：Turn 的边界与内容都由会话文件（turns + messages）提供。
-  // 这两个钩子只用来记录当前 Turn 序号与开始时间，供工具、请求记录与 turns 行关联。
-  pi.on("turn_start", (event) =>
-    safe("turn_start", () => {
-      if (!state) return;
-      state.turnIndex = event.turnIndex;
-      state.turnStartedAt = nowIso();
-    }),
-  );
-
-  pi.on("turn_end", (event) =>
-    safe("turn_end", () => {
-      const s = state;
-      if (!s?.session) return;
-
-      const turnIndex = typeof event.turnIndex === "number" ? event.turnIndex : s.turnIndex;
-      const assistant = assistantLike(event.message);
-      const usage = assistant?.usage;
-
-      const record: TurnRecord = {
-        kind: "turn",
-        session_id: s.session.sessionId,
-        run_seq: s.runSeq,
-        turn_index: turnIndex,
-        message_entry_id: event.messageEntryId,
-        started_at: s.turnStartedAt,
-        ended_at: nowIso(),
-        stop_reason: typeof assistant?.stopReason === "string" ? assistant.stopReason : null,
-        thinking_level: typeof assistant?.thinkingLevel === "string" ? assistant.thinkingLevel : null,
-        tokens_in: typeof usage?.input === "number" ? usage.input : null,
-        tokens_out: typeof usage?.output === "number" ? usage.output : null,
-        cache_read: typeof usage?.cacheRead === "number" ? usage.cacheRead : null,
-        cache_write: typeof usage?.cacheWrite === "number" ? usage.cacheWrite : null,
-        cost: typeof usage?.cost?.total === "number" ? usage.cost.total : null,
-      };
-
-      emit(s, record);
-      s.turnStartedAt = null;
-    }),
-  );
-
-  pi.on("tool_execution_start", (event) =>
-    safe("tool_execution_start", () => {
-      const s = state;
-      if (!s?.session) return;
-      const startedAt = nowIso();
-      // 事件只留操作信息（哪个工具、属于哪次调用）；参数在会话文件里，不随事件传。
-      pushEvent(s, "tool", "tool_execution_start", {
-        toolCallId: event.toolCallId,
-        toolName: event.toolName,
-        parentToolCallId: event.parentToolCallId ?? null,
-      }, { runSeq: s.runSeq, turnIndex: s.turnIndex });
-      emit(s, {
-        kind: "tool_call",
-        tool_call_id: event.toolCallId,
-        session_id: s.session.sessionId,
-        parent_tool_call_id: event.parentToolCallId ?? null,
-        tool_name: event.toolName,
-        is_error: false,
-        duration_ms: null,
-        started_at: startedAt,
-        ended_at: null,
-        run_seq: s.runStartedAt ? s.runSeq : null,
-        turn_index: s.turnStartedAt ? s.turnIndex : null,
-        entry_id: null,
-        result_entry_id: null,
-      });
-    }),
-  );
-
-  // tool_execution_update 不再订阅：部分结果属于流式内容，正文与最终结果都由会话文件提供。
-
-  pi.on("tool_execution_end", (event) =>
-    safe("tool_execution_end", () => {
-      const s = state;
-      if (!s?.session) return;
-
-      pushEvent(s, "tool", "tool_execution_end", {
-        toolCallId: event.toolCallId,
-        toolName: event.toolName,
-        isError: event.isError,
-        durationMs: event.durationMs ?? null,
-      }, { runSeq: s.runSeq, turnIndex: s.turnIndex });
-
-      emit(s, {
-        kind: "tool_call",
-        tool_call_id: event.toolCallId,
-        session_id: s.session.sessionId,
-        parent_tool_call_id: event.parentToolCallId ?? null,
-        tool_name: event.toolName,
-        is_error: event.isError === true,
-        duration_ms: typeof event.durationMs === "number" ? event.durationMs : null,
-        started_at: null,
-        ended_at: nowIso(),
-        run_seq: s.runStartedAt ? s.runSeq : null,
-        turn_index: s.turnStartedAt ? s.turnIndex : null,
-        entry_id: null,
-        result_entry_id: null,
-      });
-    }),
-  );
-
-  // ── 模型请求（M3）───────────────────────────────────────────────────────
-  pi.on("before_provider_request", (event, ctx) =>
-    safe("before_provider_request", () => {
-      const s = state;
-      if (!s?.session) return;
-      const model = ctx.model;
-      const record = s.requests.start(event.payload, {
-        provider: model?.provider ?? null,
-        api: model?.api ?? null,
-        model: model?.id ?? payloadModel(event.payload),
-        runSeq: s.runStartedAt ? s.runSeq : null,
-        turnIndex: s.turnStartedAt ? s.turnIndex : null,
-      });
-      emit(s, record);
-      pushEvent(s, "provider", "provider_request", {
-        requestSeq: record.request_seq,
-        provider: record.provider,
-        api: record.api,
-        model: record.model,
-        payloadBytes: record.payload_bytes,
-      });
-    }),
-  );
-
-  pi.on("after_provider_response", (event) =>
-    safe("after_provider_response", () => {
-      const s = state;
-      if (!s?.session) return;
-      const record = s.requests.response(event.status, event.headers);
-      if (!record) {
-        // 没有配对的请求：不凭空造一条没有 payload 的记录，只如实记一条事件
-        pushEvent(s, "provider", "provider_response_unmatched", { status: event.status });
-        return;
-      }
-      emit(s, record);
-      pushEvent(s, "provider", "provider_response", {
-        requestSeq: record.request_seq,
-        status: record.status,
-        headerNames: Object.keys(event.headers ?? {}).sort(),
-      });
-    }),
-  );
-
-  pi.on("model_select", (event) =>
-    safe("model_select", () => {
-      if (!state) return;
-      const model = event.model as unknown as { id?: unknown; name?: unknown } | undefined;
-      const previous = event.previousModel as unknown as { id?: unknown } | undefined;
-      pushEvent(state, "provider", "model_select", {
-        model: typeof model?.id === "string" ? model.id : (model?.name ?? null),
-        previousModel: typeof previous?.id === "string" ? previous.id : null,
-        source: event.source,
-      });
-    }),
-  );
-
-  pi.on("thinking_level_select", (event) =>
-    safe("thinking_level_select", () => {
-      if (!state) return;
-      pushEvent(state, "provider", "thinking_level_select", {
-        level: event.level,
-        previousLevel: event.previousLevel,
-      });
-    }),
-  );
-
-  pi.on("session_shutdown", async (event) => {
-    const s = state;
-    if (!s) return;
+  pi.on("before_provider_request", (event, ctx: ExtensionContext) => {
     try {
-      safe("session_shutdown", () => {
-        pushEvent(s, "session", "session_shutdown", {
-          reason: event.reason,
-          targetSessionFile: event.targetSessionFile ?? null,
-        });
-      });
-      // 尽力把积压发完，最多等 3 秒；超时就放弃（不能拖住 Pi 退出）
-      await flushWithin(s, 3000);
+      const sessionId = sessionIdOf(ctx);
+      if (sessionId === null) return;
+
+      const body = serialize(event.payload);
+      if (body === null) return;
+
+      const dir = requestDir(sessionId, root);
+      mkdirSync(dir, { recursive: true });
+
+      const seq = maxSeq(dir) + 1;
+      const filename = `req-${String(seq).padStart(6, "0")}-${compactTime(new Date())}.json`;
+      const target = join(dir, filename);
+
+      // 先写临时文件再改名：iCloud 同步半个文件比同步一个坏文件麻烦
+      const temp = `${target}.tmp`;
+      writeFileSync(temp, body, "utf8");
+      renameSync(temp, target);
     } catch (error) {
-      logger.log(`退出收尾失败：${(error as Error).message}`);
-    } finally {
-      stopTimers(s);
-      // 收尾后仍有剩的，说明服务端一直不可达。丢掉但必须说出来，不能假装没发生。
-      if (s.queue.depth > 0) {
-        logger.log(
-          `退出时仍有 ${s.queue.depth} 条未送达（服务端不可达？），本次会话丢弃 ${s.queue.droppedCount + s.rejectedByServer + s.queue.depth} 条`,
-        );
-      }
-      s.queue.clear();
-      state = null;
+      // 写失败不影响 Pi：只在探针自己的日志里留一句
+      log(`请求正文写入失败：${(error as Error).message}`);
     }
   });
 }
+
+/** 取会话 id；拿不到就返回 null（这次请求不写文件） */
+function sessionIdOf(ctx: ExtensionContext): string | null {
+  try {
+    const id = ctx.sessionManager.getSessionId();
+    return typeof id === "string" && id !== "" ? id : null;
+  } catch {
+    return null;
+  }
+}
+
+/** 探针日志：默认只写 stderr（Pi 进程里没有别的落点），一行一句 */
+function log(message: string): void {
+  try {
+    process.stderr.write(`[pi-observer] ${message}\n`);
+  } catch {
+    // 连日志都失败就算了
+  }
+}
+
+/** 导出目录名规则，供测试与文档使用 */
+export const __testing = {
+  safeSegment,
+  compactTime,
+  maxSeq,
+  dirname,
+};

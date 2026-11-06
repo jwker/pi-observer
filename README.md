@@ -1,179 +1,163 @@
 # pi-observer
 
-Pi 运行时数据的只读本地看板。
+Pi 会话文件的只读本地看板，外加一个把 provider 请求正文存进 iCloud 的探针。
 
-它把 Pi 的会话文件（JSONL）和 Pi 进程内探针上报的事件合到一起，在一个页面里看每轮对话、请求、工具调用、用量与钩子。
+它做两件事：
+
+1. **把 Pi 的会话文件（JSONL）渲染出来**：消息、工具调用、用量、分支，都在页面上看。
+2. **把每次 provider 请求的原始请求体存成文件**：文件放在 iCloud 的一个文件夹里，
+   页面不读这些正文，只在对应的助手消息上显示一个唯一标识（就是文件名），
+   拿着它就能在 Finder 或编辑器里找到那一份请求。
 
 ## 边界
 
-- **只读**：不写 Pi 的任何文件，不调用 Pi 的写入接口，不改变会话状态。
-- **单用户、单机**：服务固定监听回环地址，不提供账号体系，不做远程访问。
-- **不做会话管理**：不删除、不隐藏、不重命名 Pi 的会话。
-- **不推定**：取不到的字段在界面和数据里标「不可用」，不用默认值补齐。
-- **正文存文件**：完整正文（模型请求体、钩子事件、会话条目）写进 `~/.pi-observer/payloads/`，数据库只留元信息与相对路径。看板不再往库里堆正文，数据库体积可以忽略。
-- **运行数据放在工程外**：默认在 `~/.pi-observer/`。放在仓库里会被 Turbopack 的文件监听看到——看板自己在往里写正文、日志与 WAL，每次写入都触发一次重编译，dev 下页面会不停整页重载。**也不要在仓库里建 `data` 软链**：Turbopack 会跟随符号链接去监听目标目录，等于没移出去。
-- **不自动删数据**：没有保留期，到期也不清。容量由使用者自己控制：设置页能看到占用，变大了就自己导出或删除正文文件。
-- **令牌只保护写接口**：`/api/ingest` 与 `/api/backfill` 需要 `x-observer-token`；读接口不校验，因为服务只在回环地址上。
+- **只读 Pi 的东西**：不写 Pi 的任何文件，不调用 Pi 的写入接口，不改会话状态。
+- **单用户、单机**：服务固定监听回环地址，不做账号体系，不做远程访问。
+- **没有实时**：数据在打开页面或点「刷新」时读一次，不轮询、不推送。
+- **没有数据库**：会话文件就是数据源，项目不建库、不入库、不维护状态。
+- **不推定**：文件里没有的字段标「不可用」，不用默认值补齐。
+- **不读请求正文**：探针写、本项目不读。请求正文想去哪儿看就去哪儿看。
 
-## 界面
+## 怎么启动
 
-单页：左侧是项目分组与会话列表，右侧直接打开该会话的时间线；地址栏用 `?session=<id>` 同步当前会话，刷新或前进后退都能回到同一个会话。
+要求 Node `>=24 <27`。网页版与桌面版各一套命令。
 
-| 区域 | 行为 |
-|:--|:--|
-| 会话列表 | 按项目（cwd）分组，显示会话名（没有则首条用户消息）、运行状态、Turn 数与最近活动时间 |
-| 时间线 | Turn 默认折叠；默认最近 20 个，「加载更早」每次再加 20 个；倒序，打开停在顶部 |
-| 行详情 | 每行行首的 `more` 按钮打开弹窗：钩子入参、关联条目/请求/工具、原始 JSON；回填行进弹窗标「来自文件」 |
-| 请求对比 | 请求行的弹窗里多一个「对比上一条」页签：同一个会话里相邻两次请求的完整请求体逐行对比，增删行着色，没变的部分折叠 |
-| 设置 | 顶栏「设置」进设置页：数据库与正文文件分别占多少、各类记录多少条、占空间最多的会话 |
-| 顶部筛选 | 按组开关：消息 / 会话 / 运行 / 工具 / 模型 / 探针；默认全开，写入 `localStorage` |
-| 主题 | 亮色 / 暗色切换，亮色底色为中性灰 |
-| 实时 | 活跃会话每秒增量读文件；SSE 负责「有新数据」的通知，不传正文 |
-
-## 快速开始
-
-要求 Node `>=24 <27`（存储用内置的 `node:sqlite`）。
+### 一、网页版
 
 ```bash
+cd /Users/jiangjiang/Documents/host/pi-observer
 npm install
-npm run dev
-# 打开 http://127.0.0.1:4173
-```
-
-首次启动会建库并扫描 Pi 会话目录；`~/.pi-observer/token` 在第一次调用写入接口时生成（权限 `0600`）。运行数据默认在 `~/.pi-observer/`（工程外），可用 `PI_OBSERVER_DATA_DIR` 改。
-
-生产方式：
-
-```bash
-npm run build
 npm start
 ```
 
-## 接入 Pi
+`npm start` 会在没有构建产物时先构建一次（只构建一次），然后把服务跑起来；
+日志第一行是实际地址，比如 `看板地址 http://127.0.0.1:4173`，直接打开它。
+端口默认 `4173`，被占用时自动换一个空闲端口并打印实际地址；想指定就用
+`PORT=4180 npm start`。
 
-探针是 Pi 扩展，源码在 `ext/`。两种加载方式，**只选一种**，同时用会重复加载。
-
-**方式 A：个人扩展转发（推荐，重启 Pi 后一直生效）**
+改代码的时候用开发模式：
 
 ```bash
+npm run dev
+```
+
+两个命令跑的是同一个应用，功能一模一样。区别只有一个：开发模式带热更新，
+改完刷新就生效；`npm start` 跑的是构建产物，代码改动要重新构建才生效
+（`npm start` 发现源码比构建产物新时会提醒你跑一次 `npm run build`）。
+
+### 二、桌面版（Electron 窗口）
+
+网页版的页面装进一个 Electron 窗口里。四条命令，区别在于服务从哪来、要不要打包：
+
+| 命令 | 服务从哪来 | 什么时候用 |
+|:--|:--|:--|
+| `npm run desktop:dev` | `next dev` | 改代码时：窗口里 Hot Reload，不用构建 |
+| `npm run desktop:run` | 构建产物（standalone） | 本机跑桌面版：先构建，再从源码起窗口 |
+| `npm run desktop:pack` | 同上 | 打成 `.app`（`desktop/out/`），可分发 |
+| `npm run desktop:dmg` | 同上 | 打成 `.dmg`，可安装 |
+
+前两条都在仓库根目录跑，不用进 `desktop/`；Electron 依赖没装时自动装一次。
+
+后两条是真正的发布物：产物在 `desktop/out/`，`.app` 可以直接双击打开，
+`.dmg` 可以装到「应用程序」里。两者默认都不签名（自己构建、自己安装的应用
+没有隔离属性，macOS 不会拦）。
+
+应用自己挑一个空闲端口，不用管端口号。
+
+### 端口与目录
+
+| 变量 | 作用 | 默认 | 谁在用 |
+|:--|:--|:--|:--|
+| `PORT` | 服务监听端口（只监听 `127.0.0.1`）；被占用时自动换 | `4173` | 服务端 |
+| `PI_SESSIONS_DIR` | Pi 会话文件根目录 | `~/.pi/agent/sessions` | 服务端 |
+| `PI_REQUEST_STORE_DIR` | 请求正文目录 | `~/Library/Mobile Documents/com~apple~CloudDocs/PiRequests` | 服务端与探针 |
+
+会话目录只有服务端用；请求目录两边都要一致，否则页面对不上号。
+
+## 接入 Pi：装探针
+
+探针是 Pi 扩展，源码在 `ext/index.ts`，只有一个钩子：`before_provider_request`。
+它把这次请求的原始请求体写成文件，放进请求目录：
+
+```
+<请求目录>/<会话 id>/req-<六位序号>-<紧凑时间戳>.json
+```
+
+文件名就是页面上显示的那个唯一标识。
+
+**加载方式**（两种选一种，同时用会重复加载）：
+
+```bash
+# 方式 A：个人扩展转发（推荐，重启 Pi 后一直生效）
 mkdir -p ~/.pi/agent/extensions
 cat > ~/.pi/agent/extensions/pi-observer.ts <<'EOF'
 export { default } from "/绝对路径/pi-observer/ext/index.ts";
 EOF
-```
 
-改完重启 Pi 或执行 `/reload`。仓库更新后不需要再复制文件；想停用就把这个转发文件删掉或改名。
-
-**方式 B：临时加载（适合验收脚本）**
-
-```bash
+# 方式 B：临时加载（适合验收）
 pi --extension /绝对路径/pi-observer/ext
 ```
 
-验证是否生效：
+装完重启 Pi 或执行 `/reload`。
 
-```bash
-curl -s http://127.0.0.1:4173/api/health
+### 请求目录在哪
+
+默认是 iCloud Drive 下的一个文件夹：
+
+```
+~/Library/Mobile Documents/com~apple~CloudDocs/PiRequests/
 ```
 
-返回里有 `version`（探针版本，当前 `0.3.0`）、`protocol`（当前 `3`）和 `probe`（最近上报时间、积压与丢弃计数）。页面右上角的探针状态也来自同一个接口。
+用环境变量 `PI_REQUEST_STORE_DIR` 可以改。**看板服务和探针要用同一个目录**：
+看板靠它把请求文件和对话里的助手消息对上号。看板侧的同名变量是
+`PI_REQUEST_STORE_DIR`，会话目录则是 `PI_SESSIONS_DIR`。
+
+## 页面
+
+单页：左侧是项目分组与会话列表，右侧直接打开该会话的时间线；
+地址栏用 `?session=<id>` 同步当前会话。
+
+| 区域 | 行为 |
+|:--|:--|
+| 会话列表 | 按项目（cwd）分组，显示会话名（首条用户消息）、文件大小与最后修改时间 |
+| 会话头 | 工作目录、会话 id、文件路径、条目数、Turn 数、工具数、用量、成本，以及「刷新」按钮 |
+| 时间线 | 按用户消息分组（一个 Turn = 一条用户消息 + 它之后的全部条目），默认最近 20 个 Turn，「加载更早」每次再加 20 个 |
+| 行详情 | 每行行首的 `more` 按钮打开弹窗：这一条条目的原始 JSON，工具行还带参数与结果 |
+| 请求标识 | 助手消息下方显示 `req-<序号>-<时间戳>`，就是请求正文文件名 |
+| 顶部筛选 | 按组开关：消息 / 会话 / 模型 / 工具；默认全开，写入 `localStorage` |
+| 主题 | 亮色 / 暗色切换 |
 
 ## 数据从哪来
 
-| 来源 | 提供什么 | 时机 |
+| 来源 | 提供什么 | 怎么读 |
 |:--|:--|:--|
-| 会话 JSONL（真相源） | 消息条目、Turn、工具调用、token 与成本、缓存读写 | 服务启动扫描；活跃会话每秒增量读；`agent_settled` 后 3 秒再对账一次 |
-| 探针事件 | 请求/响应、钩子记录、工具结果补充、会话生命周期 | 批量 `POST /api/ingest`，队列上限 2000 条 / 64 MB |
+| 会话 JSONL | 消息、工具调用与结果、token 与成本、分支、模型切换、压缩记录 | 打开页面时读文件；解析结果按「路径 + 修改时间 + 大小」缓存在内存里（最近 3 个会话） |
+| 请求目录 | 只有文件名与大小，用来把请求对上助手消息 | 只列目录，不读文件内容 |
 
-约束：
+### 请求怎么和对话对上
 
-- 消息正文不经过探针，由服务端直接读文件，避免重复传输。
-- 正文不随批次传输：探针把请求体与事件正文写成文件，批次里只带相对路径与字节数。这样一条几 MB 的请求也不会把批次上限或内存队列撑爆。
-- 正文不截断、不脱敏：文件里是原样的请求体。数据库里另存一份「骨架」（结构保留、长字符串截短），时间线与工具列表直接读它。
-- 探针的所有 handler 返回 `undefined` 并包在 `try/catch` 里；服务不可用时只进有界队列，不阻塞 Pi。
+请求与响应是串行的：一条助手消息对应一次请求。所以对号规则是
+「时间不晚于这条助手消息、且还没有被用掉的最后一个请求文件」。
+中途失败重试会多出一个请求文件，多出来的那个自然对不上任何消息。
+
+对不上的请求文件数会记在会话数据里（`unmatched_requests`），页面上不单独显示。
+
+## 配置
+
+配置就是上面「端口与目录」那三个环境变量，没有别的。
 
 ## 目录结构
 
 ```
 src/app/            页面与 API 路由（Next.js App Router，全部 nodejs 运行时）
 src/components/     单页外壳、会话列表、时间线、详情弹窗
-src/lib/            协议契约、入库、回填、对账、查询、正文文件、差异、存储统计
-ext/                Pi 探针（扩展）源码
-tools/              截图、诊断与验收脚本
+src/lib/            会话文件解析、请求目录、行模型、树
+ext/index.ts        Pi 探针（只有一个钩子）
+tools/acceptance/   离线验收脚本
 test/               单元测试
-docs/               PRD、技术选型、可行性验证
+docs/design.md      设计说明：为什么这么做
 desktop/            桌面外壳（Electron）与打包脚本，不参与服务本身
-~/.pi-observer/     运行数据：observer.db、token、probe.json、probe.log、探针游标、payloads/ 正文文件（工程外，不进 git）
 ```
-
-## 配置
-
-服务端（环境变量，均有默认值）：
-
-| 变量 | 默认 | 说明 |
-|:--|:--|:--|
-| `PORT` | `4173` | 监听端口，地址固定 `127.0.0.1` |
-| `PI_OBSERVER_DATA_DIR` | `~/.pi-observer` | 库与令牌所在目录（放在工程外，避免 dev 下被 Turbopack 当成源码变化） |
-| `PI_OBSERVER_SESSIONS_DIR` | `~/.pi/agent/sessions` | Pi 会话文件根目录 |
-| `PI_OBSERVER_INGEST_MAX_BYTES` | `2097152` | 单批请求体上限 |
-| `PI_OBSERVER_RECONCILE_DELAY_MS` | `3000` | `agent_settled` 后多久对账 |
-
-探针：
-
-| 变量 | 默认 | 说明 |
-|:--|:--|:--|
-| `PI_OBSERVER_URL` | `http://127.0.0.1:4173` | 看板地址 |
-| `PI_OBSERVER_TOKEN_FILE` | `~/.pi-observer/token` | 令牌路径（不依赖 Pi 的 cwd） |
-| `PI_OBSERVER_PAYLOAD_DIR` | `~/.pi-observer/payloads` | 正文文件根目录（默认跟令牌同目录） |
-| `PI_OBSERVER_BATCH_SIZE` | `50` | 队列到多少条立即发送 |
-| `PI_OBSERVER_BATCH_INTERVAL_MS` | `300` | 定时发送间隔 |
-| `PI_OBSERVER_MAX_QUEUE_RECORDS` | `2000` | 队列条数上限 |
-| `PI_OBSERVER_DEBUG_REQUESTS` | 关闭 | 每次模型请求往日志写一行采集摘要 |
-| `PI_OBSERVER_DEBUG` | 关闭 | 同时把探针日志打到 stderr |
-
-### 探针怎么找到看板
-
-取值顺序是**环境变量 > 配置文件 > 内置默认值**。
-
-服务端每次启动都会把「我在哪」写进 `<数据目录>/probe.json`：
-
-```json
-{
-  "version": 1,
-  "baseUrl": "http://127.0.0.1:4173",
-  "tokenFile": "/Users/you/.pi-observer/token",
-  "payloadDir": "/Users/you/.pi-observer/payloads"
-}
-```
-
-探针启动时读这个文件，知道往哪个地址推数据、正文写到哪个目录。
-这个文件是给「服务不一定在 4173」的场景准备的——桌面版会自己挑一个空闲端口再写这个文件；
-环境变量仍然优先，因为它是人手动设的，比文件更明确。
-
-文件里的 `tokenFile` 与 `payloadDir` 保证探针和服务端指向同一份数据：两边不一致时，
-服务端读不到探针写的正文，只会在日志里打一条「正文目录不一致」的警告。
-
-探针在每个 Pi 会话开始时读一次配置；推送失败时还会再读一次——**地址变了就立刻换过去，不用重开 Pi 会话**。
-（换地址时退避会清零，不多等那几秒。）
-
-探针日志默认只写 `~/.pi-observer/probe.log`，**不进你的终端**：探针跑在 Pi 进程里，
-打到 stderr 会在你打开的每个项目里冒出一条与本项目无关的消息。
-用 `tail -f ~/.pi-observer/probe.log` 看；排查时才临时设 `PI_OBSERVER_DEBUG=1`。
-
-## API
-
-除写接口外都只读，且只在本机回环内可达。
-
-| 方法 | 路径 | 说明 |
-|:--|:--|:--|
-| `GET` | `/api/health` | 探针探活；返回协议版本、探针版本、库状态 |
-| `POST` | `/api/ingest` | 探针批量上报，需 `x-observer-token` |
-| `GET` | `/api/sessions` | 会话列表与概览指标 |
-| `GET` | `/api/session?id=&v=` | 单会话时间线；`v` 与当前版本一致时只回 `{unchanged:true}` |
-| `GET` | `/api/stream` | SSE，只推标识与版本号 |
-| `GET` | `/api/detail?session=&kind=&id=&related=` | 行详情（消息 / 工具 / 请求 / 事件） |
-| `POST` | `/api/backfill` | 手动补读，需令牌；文件没变则全部跳过 |
-| `GET` | `/api/sessions/[id]/cursor` | 会话已用的最大序号，供探针种子化 |
 
 ## 开发与验证
 
@@ -181,30 +165,11 @@ desktop/            桌面外壳（Electron）与打包脚本，不参与服务�
 npm test         # 单元测试
 npm run typecheck
 npm run build
+npm run accept   # 离线验收：临时目录与空闲端口，不碰真实数据
 npm run check    # test + typecheck + build
-npm run accept   # 离线验收，临时目录与空闲端口，不碰真实数据
 npm run verify   # check + accept
 ```
 
-档 A（`npm run accept`）共 27 项，覆盖建库、鉴权、入库幂等、截断、SSE、单页、回填、对账与状态推进、行详情、请求与用量、保留期与状态自愈。
-
-档 B 需要真实 Pi 和真实服务，会花 token，其中两项会重启 4173：
-
-| 脚本 | 验证什么 |
-|:--|:--|
-| `tools/acceptance/real-pi/tree-compare.mjs` | 消息树与文件逐条一致 |
-| `tools/acceptance/real-pi/live-session.mjs` | 活跃会话跟随文件增长，事件延迟 |
-| `tools/acceptance/real-pi/request-capture.mjs` | 请求/响应配对，序号不覆盖 |
-| `tools/acceptance/real-pi/overhead.mjs` | 探针 CPU 开销（逐对交替测量） |
-| `tools/acceptance/real-pi/latency.mjs` | 写入到页面可见的延迟 |
-| `tools/acceptance/real-pi/downtime.sh` | 服务停机期间的事件积压与恢复 |
-| `tools/acceptance/real-pi/hmr.sh` | 服务重启/热更新时不丢数据、不锁库 |
-
 ## 文档
 
-- `docs/help.md`：使用说明（怎么装、怎么用、数据在哪儿、常见问题）
-- `docs/prd-v0.2.md`：产品口径、数据来源、事件清单、页面与验收判据
-- `docs/tech-stack.md`：技术选型与版本约束
-- `docs/durable-feasibility.md`：可行性验证与实测数据
-- `tools/acceptance/README.md`：验收脚本细节
-- `AGENT.md`：协作约束（回答方式、git 策略）
+- `docs/design.md`：设计说明（数据从哪来、为什么只有一个钩子、对号规则、空间占用）

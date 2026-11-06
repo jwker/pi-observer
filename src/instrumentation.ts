@@ -1,109 +1,21 @@
 /**
- * 服务启动时扫描会话目录一次（PRD §9.1）。
+ * 服务启动时的检查。
  *
- * 几点取舍：
- *   - 只在 Node 运行时执行，构建阶段跳过（`next build` 不需要库）；
- *   - 用动态 `import` 而不是顶层 `import`：这个文件在 Edge 与 Node 两个上下文里都会被加载，
- *     而 `node:fs` / `node:sqlite` 只在 Node 侧存在；
- *   - 扫描是同步的（读文件 + 写库，中间没有 await），期间不会让出事件循环，
- *     所以不用担心和请求触发的同一次扫描交错在同一个连接上开两个事务。
+ * 项目没有数据库，也没有后台任务：数据在请求时从会话文件里读。
+ * 启动时只做一件事——确认会话目录读得到，读不到就在日志里说清楚，
+ * 不然页面只会显示「空列表」，看不出是目录路径不对。
  */
 export async function register(): Promise<void> {
   if (process.env.NEXT_RUNTIME !== "nodejs") return;
   if (process.env.NEXT_PHASE === "phase-production-build") return;
 
-  const [
-    { createBackfillContext, scanSessionsDir },
-    { log },
-    { startSessionSync },
-    { endSessionsWithoutFile },
-    { getDb },
-    { applyRetention, startRetentionJobs },
-    { config },
-    { payloadsRoot, tightenPayloadPermissions },
-    { PROBE_CONFIG_VERSION, probeConfigPath, startProbeConfigRefresh, writeProbeFileConfig },
-  ] = await Promise.all([
-    import("./lib/backfill.ts"),
-    import("./lib/log.ts"),
-    import("./lib/session-sync.ts"),
-    import("./lib/session-state.ts"),
-    import("./lib/db.ts"),
-    import("./lib/retention.ts"),
-    import("./lib/config.ts"),
-    import("./lib/payload-files.ts"),
-    import("./lib/probe-config.ts"),
-  ]);
+  const { config } = await import("./lib/config.ts");
+  const { listSessionPaths } = await import("./lib/session-files.ts");
 
-  try {
-    const ctx = createBackfillContext({ onWarning: (message) => log("warn", "backfill", message) });
-    const summary = scanSessionsDir(ctx);
-    log("info", "backfill", "启动扫描完成", {
-      root: summary.root,
-      files: summary.files,
-      skipped: summary.skipped,
-      changed: summary.changed,
-      entries: summary.entries,
-      sessions: summary.sessionIds.length,
-      warnings: summary.warnings.length,
-      took_ms: summary.tookMs,
-    });
-  } catch (error) {
-    // 扫不动不能拖垮服务：页面里的补读与实时探针都不依赖它
-    log("error", "backfill", "启动扫描失败", { error: (error as Error).message });
-  }
-
-  // 探针被强杀时收不到 agent_settled / session_shutdown，会话会永远停在「进行中」。
-  // 文件没了就说明会话不可能还在跑——启动时顺手把这类状态改回「已结束」。
-  try {
-    const outcome = endSessionsWithoutFile(getDb());
-    if (outcome.ended.length > 0) {
-      log("info", "state", "已修正过期状态", { count: outcome.ended.length });
-    }
-  } catch (error) {
-    log("warn", "state", "修正过期状态失败", { error: (error as Error).message });
-  }
-
-  // 保留期清理：payload 与事件只留 7 天（PRD §8.6）。启动时跑一次，之后每小时一次。
-  try {
-    applyRetention(getDb());
-    startRetentionJobs(getDb());
-  } catch (error) {
-    log("warn", "retention", "保留期清理失败", { error: (error as Error).message });
-  }
-
-  // 正文是原样请求体（含系统提示与全部对话历史），不脱敏也不自动清理：
-  // 收紧权限，旧的 0644 文件也一并改掉。
-  try {
-    const changed = tightenPayloadPermissions(payloadsRoot(config().dataDir));
-    if (changed > 0) {
-      log("info", "storage", "已收紧正文文件权限", { files: changed });
-    }
-  } catch (error) {
-    log("warn", "storage", "收紧正文文件权限失败", { error: (error as Error).message });
-  }
-
-  // 探针要知道往哪推数据：把自己的地址与正文目录写进配置文件。
-  // 探针跑在用户的 Pi 进程里，桌面版没法给它注入环境变量，只能靠这个文件。
-  //
-  // 写完还要**定期刷新**：服务可能换端口（桌面版每次启动都换），也可能有别的服务
-  // 实例后来写了同一个文件然后退出了 —— 文件里就留下一个不存在的地址，
-  // 探针照着它推怎么也推不到。持续刷新让还活着的服务把地址纠正回来，
-  // 探针在推送失败时重读这个文件，几秒内自己切过来。
-  try {
-    const cfg = config();
-    const path = probeConfigPath(cfg.dataDir);
-    writeProbeFileConfig(path, {
-      version: PROBE_CONFIG_VERSION,
-      baseUrl: `http://${cfg.host}:${cfg.port}`,
-      tokenFile: cfg.tokenPath,
-      payloadDir: payloadsRoot(cfg.dataDir),
-    });
-    startProbeConfigRefresh(cfg.dataDir, cfg.port, cfg.host);
-    log("info", "probe", "已写出探针配置", { path, base_url: `http://${cfg.host}:${cfg.port}` });
-  } catch (error) {
-    log("warn", "probe", "写探针配置失败", { error: (error as Error).message });
-  }
-
-  // 启动扫描之后开始每秒跟进活跃会话；已有循环时是幂等的。
-  startSessionSync();
+  const cfg = config();
+  const paths = listSessionPaths(cfg.sessionsDir);
+  console.log(
+    `[pi-observer] 会话目录 ${cfg.sessionsDir}：${paths.length} 个会话文件\n` +
+      `[pi-observer] 请求正文目录 ${cfg.requestStoreDir}`,
+  );
 }

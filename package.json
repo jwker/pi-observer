@@ -8,15 +8,19 @@
     "node": ">=24 <27"
   },
   "scripts": {
-    "dev": "next dev -H 127.0.0.1 -p 4173",
+    "dev": "node tools/dev.mjs",
     "build": "next build",
-    "start": "next start -H 127.0.0.1 -p 4173",
+    "start": "node tools/start.mjs",
     "typecheck": "next typegen && tsc --noEmit",
     "test": "node --test test/*.test.ts",
     "coverage": "node --test --experimental-test-coverage test/*.test.ts",
     "check": "npm test && npm run typecheck && npm run build",
     "accept": "node tools/acceptance/offline.mjs",
-    "verify": "npm run check && npm run accept"
+    "verify": "npm run check && npm run accept",
+    "desktop:dev": "node tools/desktop/start.mjs --dev",
+    "desktop:run": "node tools/desktop/start.mjs",
+    "desktop:pack": "ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/ npm --prefix desktop run pack",
+    "desktop:dmg": "ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/ ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/ npm --prefix desktop run dmg"
   },
   "dependencies": {
     "next": "16.4.2",

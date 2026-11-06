@@ -2,8 +2,8 @@
 
 import { useMemo, useState } from "react";
 
-import { shortId } from "@/lib/format.ts";
-import { displayState, groupByProject } from "@/lib/session-view.ts";
+import { formatBytes, shortId } from "@/lib/format.ts";
+import { groupByProject } from "@/lib/session-list.ts";
 import type { SessionListItem } from "@/lib/types.ts";
 import { RelativeTime } from "./relative-time.tsx";
 
@@ -27,7 +27,7 @@ export function SessionSidebar({
     const needle = query.trim().toLowerCase();
     if (needle === "") return sessions;
     return sessions.filter((session) =>
-      `${session.session_id} ${session.cwd} ${session.name ?? ""} ${session.first_user_text ?? ""} ${session.file_path ?? ""}`
+      `${session.session_id} ${session.cwd} ${session.first_user_text ?? ""} ${session.file_path ?? ""}`
         .toLowerCase()
         .includes(needle),
     );
@@ -40,9 +40,7 @@ export function SessionSidebar({
     <aside className="sidebar">
       <div className="sb-head">
         <span className="label">会话</span>
-        <span className="count" title={total > sessions.length ? `列表最多取 ${sessions.length} 个，库里有 ${total} 个` : undefined}>
-          {shownTotal} 个
-        </span>
+        <span className="count">{shownTotal} 个</span>
       </div>
 
       <div className="sb-search">
@@ -67,8 +65,7 @@ export function SessionSidebar({
               <span className="n">{group.sessions.length}</span>
             </div>
             {group.sessions.map((session) => {
-              const state = displayState(session);
-              const summary = session.name ?? session.first_user_text;
+              const summary = session.first_user_text;
               return (
                 <a
                   className={`sess${session.session_id === selectedId ? " on" : ""}`}
@@ -78,19 +75,19 @@ export function SessionSidebar({
                     event.preventDefault();
                     onSelect(session.session_id);
                   }}
-                  title={`${session.session_id}\n${session.cwd}`}
+                  title={`${session.session_id}\n${session.cwd}\n${session.file_path}`}
                 >
                   <div className="sess-row">
-                    <span className={`dot${state === "active" ? "" : state === "idle" ? " idle" : " ended"}`} />
-                    <span className="sum" style={summary === null ? { color: "var(--fg-3)" } : undefined}>
-                      {summary ?? "（文件里没有会话名，也还没有用户消息）"}
+                    <span
+                      className="sum"
+                      style={summary === null ? { color: "var(--fg-3)" } : undefined}
+                    >
+                      {summary ?? "（文件里还没有用户消息）"}
                     </span>
                   </div>
                   <div className="sess-meta">
                     <span>{shortId(session.session_id)}</span>
-                    <span title="模型 Turn 数；时间线按用户消息分组，显示的轮数更少">
-                      {session.turn_count} Turn
-                    </span>
+                    <span title={session.file_path ?? ""}>{formatBytes(session.size_bytes)}</span>
                     <span title={session.last_activity_at ?? ""}>
                       <RelativeTime value={session.last_activity_at} />
                     </span>
@@ -103,14 +100,14 @@ export function SessionSidebar({
 
         {groups.length === 0 ? (
           <div className="empty" style={{ padding: "24px 12px" }}>
-            {sessions.length === 0 ? "还没有任何会话数据。" : "没有匹配的会话。"}
+            {sessions.length === 0 ? "还没有任何会话文件。" : "没有匹配的会话。"}
           </div>
         ) : null}
       </div>
 
       <div className="sb-foot">
         <span className="dot-sm" style={{ color: "var(--green)" }} />
-        只读 · 不删除、不改名
+        只读 · 数据来自会话文件
       </div>
     </aside>
   );
