@@ -54,6 +54,16 @@ export default defineConfig({
         "@shared": resolve("src/shared"),
       },
     },
+    server: {
+      // 开发服务器只绑回环。固定 127.0.0.1 而不是 localhost：
+      // localhost 可能解析到 ::1，而端口探测走的是 IPv4，两者不一致时
+      // 日志里显示的端口和实际监听的端口会对不上。
+      host: "127.0.0.1",
+      // 端口交给操作系统分配：5173 这类默认端口很容易碰上别的 Vite 项目。
+      // 实际地址由 electron-vite 通过 ELECTRON_RENDERER_URL 告诉主进程，
+      // 所以没有地方需要预先知道端口号。
+      port: 0,
+    },
     build: {
       rollupOptions: {
         input: resolve("src/renderer/index.html"),
